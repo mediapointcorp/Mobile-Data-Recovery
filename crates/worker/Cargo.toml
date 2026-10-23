@@ -4,7 +4,6 @@ description = "PhotoRecovery worker: job orchestration, local JSON-lines service
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 
 [[bin]]
 name = "photorecovery-worker"

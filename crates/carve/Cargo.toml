@@ -4,7 +4,6 @@ description = "PhotoRecovery structure-aware raw image carving engine (JPEG, PNG
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 
 [dependencies]
 pr-model.workspace = true

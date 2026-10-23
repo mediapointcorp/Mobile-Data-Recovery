@@ -48,7 +48,8 @@ impl AuditLog {
         }
         let last_hash = match std::fs::read(path) {
             Ok(bytes) => bytes
-                .split(|&b| b == b'\n').rfind(|l| !l.is_empty())
+                .split(|&b| b == b'\n')
+                .rfind(|l| !l.is_empty())
                 .map(line_hash)
                 .unwrap_or_else(|| GENESIS.to_string()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => GENESIS.to_string(),

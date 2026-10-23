@@ -4,7 +4,6 @@ description = "PhotoRecovery shared result model, evidence integrity and audit l
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 
 [dependencies]
 hex.workspace = true

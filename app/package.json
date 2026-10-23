@@ -3,7 +3,7 @@
   "productName": "PhotoRecovery",
   "version": "0.1.0",
   "description": "Forensically careful photo recovery for Android devices and storage images",
-  "license": "Apache-2.0",
+  "license": "UNLICENSED",
   "private": true,
   "main": "dist/main/main/main.js",
   "scripts": {

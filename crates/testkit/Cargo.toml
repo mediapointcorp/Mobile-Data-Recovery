@@ -4,7 +4,6 @@ description = "Synthetic fixtures and ground-truth disk images for PhotoRecovery
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 publish = false
 
 [dependencies]
