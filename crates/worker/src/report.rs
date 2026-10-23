@@ -27,6 +27,8 @@ pub struct Report {
     pub limitations: Vec<String>,
     pub statements: Vec<String>,
     pub audit_events: usize,
+    /// `Ok(n)`: hash chain intact over n events; `Err(line)`: first broken line.
+    pub audit_chain: Result<usize, usize>,
 }
 
 pub fn build(case: &Case) -> Result<(Report, Vec<RecoveryResult>)> {
@@ -78,6 +80,7 @@ pub fn build(case: &Case) -> Result<(Report, Vec<RecoveryResult>)> {
     let audit_events = AuditLog::read_all(case.audit.path())
         .map(|v| v.len())
         .unwrap_or(0);
+    let audit_chain = AuditLog::verify_chain(case.audit.path()).unwrap_or(Err(0));
     let report = Report {
         tool: pr_model::TOOL_NAME.into(),
         tool_version: pr_model::TOOL_VERSION.into(),
@@ -92,6 +95,7 @@ pub fn build(case: &Case) -> Result<(Report, Vec<RecoveryResult>)> {
         limitations,
         statements,
         audit_events,
+        audit_chain,
     };
     Ok((report, results))
 }
@@ -270,9 +274,15 @@ th{{background:#f4f6f8}}code{{font-size:12px;word-break:break-all}}.ok{{color:#1
     if results.len() > 20_000 {
         h.push_str("<tr><td colspan=10>… truncated; see report.json / results.json for all results</td></tr>");
     }
+    let chain = match r.audit_chain {
+        Ok(n) => format!("<span class=ok>hash chain intact over {n} events</span>"),
+        Err(line) => format!(
+            "<span class=bad>HASH CHAIN BROKEN at line {line}</span> — the log was modified"
+        ),
+    };
     let _ = write!(
         h,
-        "</table><p>Audit log: <code>audit.jsonl</code> ({} events).</p></body></html>",
+        "</table><h2>Audit log</h2><p><code>audit.jsonl</code>: {} events, {chain}. Verified when this report was generated; events after that (such as this report's generation) are appended later.</p></body></html>",
         r.audit_events
     );
     h

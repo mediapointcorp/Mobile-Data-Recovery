@@ -95,7 +95,9 @@ fn peak_rss() -> Option<u64> {
 
 #[cfg(windows)]
 fn peak_rss() -> Option<u64> {
-    use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
     unsafe {
         let mut c: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
@@ -126,7 +128,10 @@ impl ScanSink for CountSink {
 
 fn carve_only(image: &Path, chunk_mib: u32) -> Result<CarveOnly> {
     let src = FileSource::open(image)?;
-    let cfg = ScanConfig { chunk_size: (chunk_mib as usize) << 20, ..Default::default() };
+    let cfg = ScanConfig {
+        chunk_size: (chunk_mib as usize) << 20,
+        ..Default::default()
+    };
     let mut st = ScanState::default();
     let mut sink = CountSink(0);
     let t = Instant::now();
@@ -171,14 +176,32 @@ struct CarveMetrics {
 }
 
 fn carve_metrics(manifest: &Manifest, results: &[RecoveryResult], secs: f64) -> CarveMetrics {
-    let originals: HashSet<&str> = manifest.entries.iter().map(|e| e.original_sha256.as_str()).filter(|s| !s.is_empty()).collect();
-    let raw: Vec<&RecoveryResult> = results.iter().filter(|r| r.method == RecoveryMethod::RawCarve).collect();
-    let truth_offsets: HashSet<u64> = manifest.entries.iter().filter(|e| e.scenario != Scenario::FalsePositive).map(|e| e.offset).collect();
+    let originals: HashSet<&str> = manifest
+        .entries
+        .iter()
+        .map(|e| e.original_sha256.as_str())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let raw: Vec<&RecoveryResult> = results
+        .iter()
+        .filter(|r| r.method == RecoveryMethod::RawCarve)
+        .collect();
+    let truth_offsets: HashSet<u64> = manifest
+        .entries
+        .iter()
+        .filter(|e| e.scenario != Scenario::FalsePositive)
+        .map(|e| e.offset)
+        .collect();
     let mut by: BTreeMap<String, ScenarioStats> = BTreeMap::new();
     let (mut fp_placed, mut fp_accepted) = (0, 0);
     for e in &manifest.entries {
-        let at: Vec<&&RecoveryResult> = raw.iter().filter(|r| r.source_offset == Some(e.offset)).collect();
-        let s = by.entry(format!("{:?}", e.scenario).to_lowercase()).or_default();
+        let at: Vec<&&RecoveryResult> = raw
+            .iter()
+            .filter(|r| r.source_offset == Some(e.offset))
+            .collect();
+        let s = by
+            .entry(format!("{:?}", e.scenario).to_lowercase())
+            .or_default();
         s.placed += 1;
         if e.scenario == Scenario::FalsePositive {
             fp_placed += 1;
@@ -188,9 +211,15 @@ fn carve_metrics(manifest: &Manifest, results: &[RecoveryResult], secs: f64) -> 
             }
             continue;
         }
-        if at.iter().any(|r| r.sha256.as_deref() == Some(e.original_sha256.as_str())) {
+        if at
+            .iter()
+            .any(|r| r.sha256.as_deref() == Some(e.original_sha256.as_str()))
+        {
             s.byte_identical += 1;
-        } else if at.iter().any(|r| r.classification == Classification::PartialImage) {
+        } else if at
+            .iter()
+            .any(|r| r.classification == Classification::PartialImage)
+        {
             s.partial += 1;
         } else if !at.is_empty() {
             s.other_result += 1;
@@ -198,18 +227,50 @@ fn carve_metrics(manifest: &Manifest, results: &[RecoveryResult], secs: f64) -> 
             s.missed += 1;
         }
     }
-    let recoverable: Vec<_> = manifest.entries.iter().filter(|e| e.scenario.fully_recoverable()).collect();
+    let recoverable: Vec<_> = manifest
+        .entries
+        .iter()
+        .filter(|e| e.scenario.fully_recoverable())
+        .collect();
     let rec_ok = recoverable
         .iter()
-        .filter(|e| raw.iter().any(|r| r.source_offset == Some(e.offset) && r.sha256.as_deref() == Some(e.original_sha256.as_str())))
+        .filter(|e| {
+            raw.iter().any(|r| {
+                r.source_offset == Some(e.offset)
+                    && r.sha256.as_deref() == Some(e.original_sha256.as_str())
+            })
+        })
         .count();
-    let carved: Vec<_> = raw.iter().filter(|r| r.classification == Classification::CarvedImage).collect();
-    let correct = carved.iter().filter(|r| r.sha256.as_deref().is_some_and(|h| originals.contains(h))).count();
-    let fps = raw.iter().filter(|r| !r.source_offset.is_some_and(|o| truth_offsets.contains(&o))).count();
-    let damaged: Vec<_> = manifest.entries.iter().filter(|e| matches!(e.scenario, Scenario::Truncated | Scenario::Corrupted | Scenario::Fragmented)).collect();
+    let carved: Vec<_> = raw
+        .iter()
+        .filter(|r| r.classification == Classification::CarvedImage)
+        .collect();
+    let correct = carved
+        .iter()
+        .filter(|r| r.sha256.as_deref().is_some_and(|h| originals.contains(h)))
+        .count();
+    let fps = raw
+        .iter()
+        .filter(|r| !r.source_offset.is_some_and(|o| truth_offsets.contains(&o)))
+        .count();
+    let damaged: Vec<_> = manifest
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.scenario,
+                Scenario::Truncated | Scenario::Corrupted | Scenario::Fragmented
+            )
+        })
+        .collect();
     let damaged_yield = damaged
         .iter()
-        .filter(|e| raw.iter().any(|r| r.source_offset == Some(e.offset) && r.classification == Classification::PartialImage))
+        .filter(|e| {
+            raw.iter().any(|r| {
+                r.source_offset == Some(e.offset)
+                    && r.classification == Classification::PartialImage
+            })
+        })
         .count();
     let ratio = |a: usize, b: usize| if b == 0 { 0.0 } else { a as f64 / b as f64 };
     CarveMetrics {
@@ -224,7 +285,10 @@ fn carve_metrics(manifest: &Manifest, results: &[RecoveryResult], secs: f64) -> 
         false_positive_signatures_placed: fp_placed,
         false_positive_signatures_accepted: fp_accepted,
         partial_yield: ratio(damaged_yield, damaged.len()),
-        embedded_thumbnails: results.iter().filter(|r| r.method == RecoveryMethod::EmbeddedThumbnail).count(),
+        embedded_thumbnails: results
+            .iter()
+            .filter(|r| r.method == RecoveryMethod::EmbeddedThumbnail)
+            .count(),
         pipeline_seconds: secs,
     }
 }
@@ -238,7 +302,11 @@ struct FatRow {
     missed: usize,
 }
 
-fn run_job(tmp: &Path, name: &str, image: &Path) -> Result<(Vec<RecoveryResult>, Vec<String>, f64)> {
+fn run_job(
+    tmp: &Path,
+    name: &str,
+    image: &Path,
+) -> Result<(Vec<RecoveryResult>, Vec<String>, f64)> {
     let case = Case::open_or_create(&tmp.join(name))?;
     let mut rec = jobs::create_job(
         &case,
@@ -252,7 +320,12 @@ fn run_job(tmp: &Path, name: &str, image: &Path) -> Result<(Vec<RecoveryResult>,
         }),
     )?;
     let t = Instant::now();
-    jobs::run_job(&case, &mut rec, &pr_model::new_cancel_flag(), &pr_worker::NoProgress)?;
+    jobs::run_job(
+        &case,
+        &mut rec,
+        &pr_model::new_cancel_flag(),
+        &pr_worker::NoProgress,
+    )?;
     let secs = t.elapsed().as_secs_f64();
     let (rs, _) = pr_worker::finalize::finalize(&case)?;
     Ok((rs, rec.limitations.clone(), secs))
@@ -269,7 +342,15 @@ fn fat_benchmark(tmp: &Path, n: usize, seed: u64) -> Result<BTreeMap<String, Fat
         s += 1;
         let w = rng.range(320, 1024) as u32 & !7;
         let h = rng.range(240, 768) as u32 & !7;
-        images::jpeg(w, h, s, &JpegOpts { exif_thumbnail: false, ..Default::default() })
+        images::jpeg(
+            w,
+            h,
+            s,
+            &JpegOpts {
+                exif_thumbnail: false,
+                ..Default::default()
+            },
+        )
     };
     let mut overwrite = Vec::new();
     for i in 0..n {
@@ -282,14 +363,22 @@ fn fat_benchmark(tmp: &Path, n: usize, seed: u64) -> Result<BTreeMap<String, Fat
         let p = format!("DCIM/Camera/IMG_DEL_{i:04}.jpg");
         b.add_file(&p, &del);
         b.delete(&p);
-        truth.push(("deleted_contiguous".into(), format!("/{p}"), sha256_hex(&del)));
+        truth.push((
+            "deleted_contiguous".into(),
+            format!("/{p}"),
+            sha256_hex(&del),
+        ));
 
         let ow = next(&mut rng);
         let p = format!("DCIM/Camera/IMG_OVER_{i:04}.jpg");
         let f = b.add_file(&p, &ow);
         b.delete(&p);
         overwrite.push((f.clusters.clone(), ow.len()));
-        truth.push(("deleted_overwritten".into(), format!("/{p}"), sha256_hex(&ow)));
+        truth.push((
+            "deleted_overwritten".into(),
+            format!("/{p}"),
+            sha256_hex(&ow),
+        ));
 
         let fr = next(&mut rng);
         let p = format!("DCIM/Camera/IMG_FRAG_{i:04}.jpg");
@@ -297,7 +386,11 @@ fn fat_benchmark(tmp: &Path, n: usize, seed: u64) -> Result<BTreeMap<String, Fat
         scrub_signatures(&mut other);
         b.add_interleaved(&p, &fr, &format!("DCIM/Camera/other_{i:04}.bin"), &other);
         b.delete(&p);
-        truth.push(("deleted_fragmented".into(), format!("/{p}"), sha256_hex(&fr)));
+        truth.push((
+            "deleted_fragmented".into(),
+            format!("/{p}"),
+            sha256_hex(&fr),
+        ));
     }
     for (i, (cl, len)) in overwrite.into_iter().enumerate() {
         b.add_file_clusters(&format!("DCIM/Camera/new_{i:04}.bin"), &vec![0x33; len], cl);
@@ -311,13 +404,27 @@ fn fat_benchmark(tmp: &Path, n: usize, seed: u64) -> Result<BTreeMap<String, Fat
         row.files += 1;
         let fs: Vec<_> = rs
             .iter()
-            .filter(|r| matches!(r.method, RecoveryMethod::FilesystemDeletedEntry | RecoveryMethod::FilesystemLiveEntry) && r.source_path.as_deref() == Some(path.as_str()))
+            .filter(|r| {
+                matches!(
+                    r.method,
+                    RecoveryMethod::FilesystemDeletedEntry | RecoveryMethod::FilesystemLiveEntry
+                ) && r.source_path.as_deref() == Some(path.as_str())
+            })
             .collect();
-        if fs.iter().any(|r| r.sha256.as_deref() == Some(sha.as_str()) && r.classification != Classification::PartialImage) {
+        if fs.iter().any(|r| {
+            r.sha256.as_deref() == Some(sha.as_str())
+                && r.classification != Classification::PartialImage
+        }) {
             row.byte_identical += 1;
-        } else if fs.iter().any(|r| r.classification == Classification::PartialImage) {
+        } else if fs
+            .iter()
+            .any(|r| r.classification == Classification::PartialImage)
+        {
             row.partial += 1;
-        } else if fs.iter().any(|r| r.classification == Classification::UnavailableSourceData) {
+        } else if fs
+            .iter()
+            .any(|r| r.classification == Classification::UnavailableSourceData)
+        {
             row.unavailable += 1;
         } else {
             row.missed += 1;
@@ -338,15 +445,30 @@ fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Fixtures { out, seed } => {
             std::fs::create_dir_all(&out)?;
-            let (disk, manifest) = standard_disk(&StandardDiskParams { seed, ..Default::default() });
+            let (disk, manifest) = standard_disk(&StandardDiskParams {
+                seed,
+                ..Default::default()
+            });
             std::fs::write(out.join("raw-disk.img"), &disk)?;
-            std::fs::write(out.join("raw-disk.manifest.json"), serde_json::to_vec_pretty(&manifest)?)?;
+            std::fs::write(
+                out.join("raw-disk.manifest.json"),
+                serde_json::to_vec_pretty(&manifest)?,
+            )?;
             let mut b = FatBuilder::new(40, 1);
             b.mkdir("DCIM");
             b.mkdir("DCIM/Camera");
             let mut truth = Vec::new();
             for i in 0..6u64 {
-                let j = images::jpeg(640, 480, seed + i, &JpegOpts { exif_thumbnail: true, exif_datetime: Some(format!("2024:06:0{} 09:00:00", i + 1)), ..Default::default() });
+                let j = images::jpeg(
+                    640,
+                    480,
+                    seed + i,
+                    &JpegOpts {
+                        exif_thumbnail: true,
+                        exif_datetime: Some(format!("2024:06:0{} 09:00:00", i + 1)),
+                        ..Default::default()
+                    },
+                );
                 let p = format!("DCIM/Camera/IMG_2024060{}_090000.jpg", i + 1);
                 b.add_file(&p, &j);
                 let deleted = i % 2 == 1;
@@ -356,18 +478,37 @@ fn main() -> Result<()> {
                 truth.push(serde_json::json!({ "path": format!("/{p}"), "deleted": deleted, "sha256": sha256_hex(&j) }));
             }
             std::fs::write(out.join("sdcard-fat32.img"), b.finish())?;
-            std::fs::write(out.join("sdcard-fat32.manifest.json"), serde_json::to_vec_pretty(&truth)?)?;
+            std::fs::write(
+                out.join("sdcard-fat32.manifest.json"),
+                serde_json::to_vec_pretty(&truth)?,
+            )?;
             println!("wrote fixtures to {}", out.display());
             Ok(())
         }
         Cmd::CarveOnly { image, chunk_mib } => {
-            println!("{}", serde_json::to_string(&carve_only(&image, chunk_mib)?)?);
+            println!(
+                "{}",
+                serde_json::to_string(&carve_only(&image, chunk_mib)?)?
+            );
             Ok(())
         }
-        Cmd::Run { seed, jpegs, pad_mb, chunk_mib, fat_files, out } => {
+        Cmd::Run {
+            seed,
+            jpegs,
+            pad_mb,
+            chunk_mib,
+            fat_files,
+            out,
+        } => {
             std::fs::create_dir_all(&out)?;
             let tmp = tempfile::tempdir()?;
-            let params = StandardDiskParams { seed, jpegs, chunk_size: (chunk_mib as u64) << 20, min_dim: 160, max_dim: 2048 };
+            let params = StandardDiskParams {
+                seed,
+                jpegs,
+                chunk_size: (chunk_mib as u64) << 20,
+                min_dim: 160,
+                max_dim: 2048,
+            };
             eprintln!("generating ground-truth disk ({jpegs} intact JPEGs + scenarios)...");
             let (disk, manifest) = standard_disk(&params);
             let image = tmp.path().join("disk.img");
@@ -382,14 +523,24 @@ fn main() -> Result<()> {
                     f.write_all(&block)?;
                 }
             }
-            std::fs::write(out.join("manifest.json"), serde_json::to_vec_pretty(&manifest)?)?;
+            std::fs::write(
+                out.join("manifest.json"),
+                serde_json::to_vec_pretty(&manifest)?,
+            )?;
 
             eprintln!("measuring carve throughput and peak memory in a child process...");
             let child = std::process::Command::new(self_exe()?)
-                .args(["carve-only", "--image", &image.display().to_string(), "--chunk-mib", &chunk_mib.to_string()])
+                .args([
+                    "carve-only",
+                    "--image",
+                    &image.display().to_string(),
+                    "--chunk-mib",
+                    &chunk_mib.to_string(),
+                ])
                 .output()
                 .context("running carve-only child")?;
-            let carve: CarveOnly = serde_json::from_slice(&child.stdout).context("parsing carve-only output")?;
+            let carve: CarveOnly =
+                serde_json::from_slice(&child.stdout).context("parsing carve-only output")?;
 
             eprintln!("running full pipeline (export + validation + classification)...");
             let (rs, _lim, secs) = run_job(tmp.path(), "case-disk", &image)?;
@@ -416,7 +567,12 @@ fn main() -> Result<()> {
             std::fs::write(out.join("bench.json"), serde_json::to_vec_pretty(&doc)?)?;
 
             let mut md = String::new();
-            md.push_str(&format!("# Benchmark results\n\nTool {} · seed {seed} · {} · {}\n\n", pr_model::TOOL_VERSION, std::env::consts::OS, std::env::consts::ARCH));
+            md.push_str(&format!(
+                "# Benchmark results\n\nTool {} · seed {seed} · {} · {}\n\n",
+                pr_model::TOOL_VERSION,
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            ));
             md.push_str("## Carving (synthetic raw image)\n\n");
             md.push_str(&format!(
                 "| Metric | Value |\n|---|---|\n| Image size | {:.1} MB |\n| Carve-only throughput | {:.0} MB/s ({:.2} s) |\n| Peak memory (carve-only process) | {} |\n| Full pipeline time (export + validate) | {:.2} s |\n| Byte-identical recovery (recoverable scenarios) | {} |\n| Valid-candidate precision (carved images matching an original) | {} ({}/{}) |\n| False-positive rate (raw results not at a placed file) | {} ({}/{}) |\n| Fake signatures accepted | {}/{} |\n| Partial-image yield (truncated/corrupted/fragmented) | {} |\n| Embedded EXIF thumbnails recovered | {} |\n\n",
@@ -439,11 +595,17 @@ fn main() -> Result<()> {
             ));
             md.push_str("### By scenario\n\n| Scenario | Placed | Byte-identical | Partial | Other result | Missed |\n|---|---|---|---|---|---|\n");
             for (k, v) in &metrics.by_scenario {
-                md.push_str(&format!("| {k} | {} | {} | {} | {} | {} |\n", v.placed, v.byte_identical, v.partial, v.other_result, v.missed));
+                md.push_str(&format!(
+                    "| {k} | {} | {} | {} | {} | {} |\n",
+                    v.placed, v.byte_identical, v.partial, v.other_result, v.missed
+                ));
             }
             md.push_str("\n## FAT32 deleted-record recovery\n\n| Scenario | Files | Byte-identical | Partial | Reported unavailable | Missed |\n|---|---|---|---|---|---|\n");
             for (k, v) in &fat {
-                md.push_str(&format!("| {k} | {} | {} | {} | {} | {} |\n", v.files, v.byte_identical, v.partial, v.unavailable, v.missed));
+                md.push_str(&format!(
+                    "| {k} | {} | {} | {} | {} | {} |\n",
+                    v.files, v.byte_identical, v.partial, v.unavailable, v.missed
+                ));
             }
             md.push_str(&format!(
                 "\n## Encrypted-source control\n\n32 MB of random data (stand-in for ciphertext): {} results; limitation reported: {}.\n",

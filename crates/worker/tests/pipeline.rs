@@ -214,6 +214,12 @@ fn fat_image_end_to_end() {
         .unwrap()
         .contains("\"statements\""));
     let audit = pr_model::audit::AuditLog::read_all(&case.root.join("audit.jsonl")).unwrap();
+    assert!(
+        pr_model::audit::AuditLog::verify_chain(&case.root.join("audit.jsonl"))
+            .unwrap()
+            .is_ok()
+    );
+    assert!(html.contains("hash chain intact"));
     for ev in [
         "case_created",
         "evidence_registered",
