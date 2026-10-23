@@ -8,6 +8,7 @@ members = [
     "crates/adb",
     "crates/worker",
     "crates/testkit",
+    "crates/bench",
 ]
 
 [workspace.package]

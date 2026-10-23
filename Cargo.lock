@@ -511,6 +511,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pr-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "photorecovery-worker",
+ "pr-carve",
+ "pr-model",
+ "pr-testkit",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "windows-sys",
+]
+
+[[package]]
 name = "pr-carve"
 version = "0.1.0"
 dependencies = [

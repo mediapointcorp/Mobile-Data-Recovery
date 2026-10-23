@@ -1,0 +1,26 @@
+[package]
+name = "pr-bench"
+description = "PhotoRecovery ground-truth benchmark harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "pr-bench"
+path = "src/main.rs"
+
+[dependencies]
+pr-model.workspace = true
+pr-carve.workspace = true
+pr-testkit.workspace = true
+photorecovery-worker = { path = "../worker" }
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
