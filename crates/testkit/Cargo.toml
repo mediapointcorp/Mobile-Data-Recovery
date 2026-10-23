@@ -1,0 +1,15 @@
+[package]
+name = "pr-testkit"
+description = "Synthetic fixtures and ground-truth disk images for PhotoRecovery tests and benchmarks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+pr-model.workspace = true
+image.workspace = true
+jpeg-encoder.workspace = true
+serde.workspace = true
+serde_json.workspace = true

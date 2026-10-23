@@ -1,0 +1,7 @@
+/target/
+**/node_modules/
+/app/dist/
+/app/release/
+/cases/
+*.img.tmp
+.DS_Store
