@@ -19,18 +19,21 @@ fn reads_real_ntfs_system_volume() {
         &sys
     ));
     if !drives::is_elevated() {
+        // On CI the raw read is the point of this test: a skip must not pass.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI runner is not elevated; raw drive read was not tested"
+        );
         eprintln!("skipped raw read: not running as administrator");
         return;
     }
     let dev = pr_model::device::open_device(&drives::device_path(&sys).unwrap()).unwrap();
     assert!(dev.len() > 1 << 30, "volume size {}", dev.len());
-    if entry.filesystem.as_deref() != Some("NTFS") {
-        eprintln!(
-            "skipped NTFS checks: system drive is {:?}",
-            entry.filesystem
-        );
-        return;
-    }
+    assert_eq!(
+        entry.filesystem.as_deref(),
+        Some("NTFS"),
+        "system drive filesystem"
+    );
     let v =
         pr_fs::ntfs::NtfsVolume::open(&dev).expect("parse real NTFS boot sector, $MFT and $Bitmap");
     assert!(v.has_bitmap());
