@@ -223,8 +223,12 @@ impl Server {
             ),
             "case.open" => {
                 let p: PathParam = Self::p(params)?;
-                if !self.running.lock().unwrap().is_empty() {
-                    bail!("cannot switch cases while a job is running");
+                {
+                    let mut running = self.running.lock().unwrap();
+                    running.retain(|_, r| !r.handle.is_finished());
+                    if !running.is_empty() {
+                        bail!("cannot switch cases while a job is running");
+                    }
                 }
                 let c = Case::open_or_create(&PathBuf::from(p.path))?;
                 let v = json!({ "root": c.root.display().to_string(), "info": c.info });
