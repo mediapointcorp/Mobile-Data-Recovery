@@ -3,6 +3,7 @@
 
 import type {
   Classification,
+  DriveInfo,
   JobInfo,
   ListedDevice,
   PhotoRecoveryApi,
@@ -74,6 +75,7 @@ function show(view: string): void {
   document.querySelectorAll<HTMLElement>(".view").forEach((v) => v.classList.toggle("hidden", v.id !== `view-${view}`));
   document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   if (view === "jobs") void refreshJobs();
+  if (view === "pc") void refreshDrives();
   if (view === "results" && results.length === 0) void loadResults(true);
 }
 
@@ -89,6 +91,7 @@ $("btn-case").addEventListener("click", async () => {
   $("case-label").textContent = `Case: ${r.root}`;
   results = [];
   void refreshJobs();
+  void refreshDrives();
   toast("Case opened");
 });
 
@@ -96,6 +99,69 @@ function needCase(): boolean {
   if (!caseOpen) toast("Open or create a case folder first (it must not be inside the evidence).", true);
   return caseOpen;
 }
+
+// ---------- this PC ----------
+
+async function refreshDrives(): Promise<void> {
+  const r = await guard(api.drives());
+  const tbody = $("drive-table").querySelector("tbody")!;
+  tbody.replaceChildren();
+  const banner = $("admin-banner");
+  if (!r) return;
+  banner.replaceChildren();
+  banner.classList.toggle("hidden", r.elevated);
+  if (!r.elevated) {
+    const btn = h("button", { class: "primary", text: "Restart as administrator" });
+    btn.addEventListener("click", () => void guard(api.relaunchAsAdmin()));
+    banner.append(
+      h("p", { text: "Scanning a drive needs administrator rights (Windows only lets administrators read a disk directly). PhotoRecovery only reads the drive; it never writes to it." }),
+      ...(api.platform() === "win32" ? [btn] : []),
+    );
+  }
+  if (r.drives.length === 0) {
+    tbody.append(h("tr", {}, [h("td", { text: "No drives found." })]));
+  }
+  for (const d of r.drives) tbody.append(driveRow(d, r.elevated));
+}
+
+function driveRow(d: DriveInfo, elevated: boolean): HTMLTableRowElement {
+  const kind: string[] = [];
+  if (d.kind === "disk") kind.push("whole disk");
+  if (d.drive_type && d.drive_type !== "disk") kind.push(d.drive_type);
+  if (d.ssd === true) kind.push("SSD");
+  if (d.ssd === false) kind.push("HDD");
+  if (d.filesystem) kind.push(d.filesystem);
+  const notes = h("td");
+  for (const n of d.notes) notes.append(h("div", { class: "muted small", text: n }));
+  if (d.holds_case) notes.append(h("div", { class: "chip bad", text: "Your case folder is on this drive — choose a case folder on another drive to scan it." }));
+  const act = h("td");
+  const scannable = d.drive_type !== "network" && d.drive_type !== "optical";
+  if (scannable) {
+    const b = h("button", { class: "primary", text: "Scan for deleted photos" });
+    b.disabled = d.holds_case || !elevated;
+    b.addEventListener("click", () => {
+      if (!needCase()) return;
+      void startJob({
+        kind: "drive_scan",
+        drive: d.id,
+        all_space: (document.getElementById("opt-all-space") as HTMLInputElement).checked,
+        include_existing: (document.getElementById("opt-existing") as HTMLInputElement).checked,
+      });
+    });
+    act.append(b);
+  }
+  const name = [d.label, d.is_system ? "(Windows)" : ""].filter(Boolean).join(" ");
+  return h("tr", {}, [
+    h("td", { class: "mono", text: d.id }),
+    h("td", { text: name }),
+    h("td", { text: kind.join(" · ") }),
+    h("td", { text: d.size !== null ? `${fmtBytes(d.size)}${d.free !== null ? ` (${fmtBytes(d.free)} free)` : ""}` : "?" }),
+    notes,
+    act,
+  ]);
+}
+
+$("btn-refresh-drives").addEventListener("click", () => void refreshDrives());
 
 // ---------- device ----------
 
@@ -520,5 +586,6 @@ $("btn-open-report").addEventListener("click", () => void guard(api.openReport()
 
 // ---------- init ----------
 
+void refreshDrives();
 void refreshAdb();
 void refreshDevices();

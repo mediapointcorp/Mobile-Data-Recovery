@@ -6,6 +6,7 @@
 //! * [`audit`] — append-only JSON-lines audit log.
 
 pub mod audit;
+pub mod device;
 pub mod evidence;
 pub mod model;
 pub mod source;

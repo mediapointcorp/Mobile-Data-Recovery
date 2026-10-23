@@ -71,6 +71,9 @@ pub enum EvidenceMode {
     ReadOnlyOriginal,
     /// A hash-verified working copy is created and analysed instead.
     WorkingCopy,
+    /// A mounted drive read in place. It cannot be hashed meaningfully
+    /// because the running system may write to it during the scan.
+    LiveDevice,
 }
 
 /// Integrity record for one evidence item.

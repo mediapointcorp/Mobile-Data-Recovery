@@ -50,6 +50,24 @@ enum Cmd {
         #[arg(long)]
         chunk_mib: Option<u32>,
     },
+    /// List PC drives and disks that can be scanned.
+    Drives,
+    /// Scan a PC drive in place for deleted photos (needs administrator).
+    ScanDrive {
+        #[arg(long)]
+        case: PathBuf,
+        /// `D:`, `PhysicalDrive1` (Windows) or `sdb` (Linux).
+        #[arg(long)]
+        drive: String,
+        /// Carve the whole drive instead of only free space.
+        #[arg(long)]
+        all_space: bool,
+        /// Also list photos that still exist.
+        #[arg(long)]
+        include_existing: bool,
+        #[arg(long)]
+        formats: Option<String>,
+    },
     /// Search an existing local folder (backups, copies) for images.
     ScanDir {
         #[arg(long)]
@@ -216,6 +234,36 @@ fn main() -> Result<()> {
                     filesystem_analysis: !no_fs,
                     carve: !no_carve,
                     chunk_size_mib: chunk_mib,
+                    carve_scope: Default::default(),
+                    include_existing: true,
+                }),
+            )
+        }
+        Cmd::Drives => {
+            let v = serde_json::json!({ "elevated": pr_worker::drives::is_elevated(), "drives": pr_worker::drives::list() });
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            Ok(())
+        }
+        Cmd::ScanDrive {
+            case,
+            drive,
+            all_space,
+            include_existing,
+            formats,
+        } => {
+            let case = Case::open_or_create(&abs(case)?)?;
+            run_new(
+                &case,
+                JobParams::DriveScan(pr_worker::jobs::drive::DriveScanParams {
+                    drive,
+                    formats,
+                    carve_scope: if all_space {
+                        pr_worker::jobs::image::CarveScope::All
+                    } else {
+                        pr_worker::jobs::image::CarveScope::Unallocated
+                    },
+                    include_existing,
+                    chunk_size_mib: None,
                 }),
             )
         }

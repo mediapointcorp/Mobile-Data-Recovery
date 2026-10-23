@@ -65,6 +65,17 @@ enum Cmd {
         #[arg(long, default_value_t = 42)]
         seed: u64,
     },
+    /// Write N test photos (JPEG with EXIF thumbnail) to a folder.
+    Jpegs {
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value_t = 10)]
+        count: u64,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        #[arg(long, default_value = "IMG")]
+        prefix: String,
+    },
     /// Internal: carve an image without exporting; print timing and memory.
     CarveOnly {
         #[arg(long)]
@@ -317,6 +328,8 @@ fn run_job(
             filesystem_analysis: true,
             carve: true,
             chunk_size_mib: None,
+            carve_scope: Default::default(),
+            include_existing: true,
         }),
     )?;
     let t = Instant::now();
@@ -483,6 +496,31 @@ fn main() -> Result<()> {
                 serde_json::to_vec_pretty(&truth)?,
             )?;
             println!("wrote fixtures to {}", out.display());
+            Ok(())
+        }
+        Cmd::Jpegs {
+            out,
+            count,
+            seed,
+            prefix,
+        } => {
+            std::fs::create_dir_all(&out)?;
+            let mut rng = Rng::new(seed);
+            for i in 0..count {
+                let w = rng.range(400, 1400) as u32 & !7;
+                let h = rng.range(300, 1000) as u32 & !7;
+                let j = images::jpeg(
+                    w,
+                    h,
+                    seed * 1000 + i,
+                    &JpegOpts {
+                        exif_thumbnail: true,
+                        quality: 88,
+                        ..Default::default()
+                    },
+                );
+                std::fs::write(out.join(format!("{prefix}_{i:04}.jpg")), j)?;
+            }
             Ok(())
         }
         Cmd::CarveOnly { image, chunk_mib } => {

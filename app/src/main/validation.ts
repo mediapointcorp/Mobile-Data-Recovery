@@ -38,12 +38,12 @@ export function assertInt(n: unknown, min: number, max: number): number {
 export class GrantedPaths {
   private granted = new Map<string, Set<string>>();
 
-  grant(purpose: "image" | "folder" | "export" | "case", path: string): void {
+  grant(purpose: "image" | "folder" | "export" | "case" | "drive", path: string): void {
     if (!this.granted.has(purpose)) this.granted.set(purpose, new Set());
     this.granted.get(purpose)!.add(path);
   }
 
-  require(purpose: "image" | "folder" | "export" | "case", path: unknown): string {
+  require(purpose: "image" | "folder" | "export" | "case" | "drive", path: unknown): string {
     if (typeof path !== "string" || !this.granted.get(purpose)?.has(path)) {
       throw new ValidationError(`path was not selected by the user for ${purpose}`);
     }
@@ -73,6 +73,15 @@ export function toWorkerJob(job: unknown, paths: GrantedPaths): Record<string, u
         formats: j.formats.join(","),
         filesystem_analysis: j.filesystem_analysis,
         carve: j.carve,
+      };
+    }
+    case "drive_scan": {
+      if (typeof j.all_space !== "boolean" || typeof j.include_existing !== "boolean") throw new ValidationError("invalid options");
+      return {
+        kind: "drive_scan",
+        drive: paths.require("drive", j.drive),
+        carve_scope: j.all_space ? "all" : "unallocated",
+        include_existing: j.include_existing,
       };
     }
     case "local_scan":

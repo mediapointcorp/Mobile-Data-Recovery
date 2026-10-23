@@ -33,6 +33,13 @@ Attackers considered: a crafted disk image or phone file system (untrusted bytes
 - Root operations need an exact typed confirmation (`READ-ONLY ROOT ACQUISITION <serial>`). The main process checks it for acquisition jobs, and the ADB adapter checks it again for every root operation. A test asserts that no command runs before the confirmation is checked.
 - `su` is never executed for capability detection; only `command -v su` is used.
 
+### Raw drive access (PC drive scans)
+
+- **Read-only access.** Drives are opened with read access only, and share mode read+write so Windows keeps working. No code path opens a device for writing.
+- **Only listed drives can be scanned.** The renderer can only start a scan for a drive identifier the worker itself returned in `drives.list` during this session. The identifier is validated again in the worker: `X:` / `PhysicalDriveN` only, mapped to `\\.\` paths internally.
+- **No writing to the scanned drive.** A drive scan refuses to run when the case folder is on that drive. For whole disks this is checked by mapping the case volume to its physical disk numbers; if the mapping is unknown, the scan is refused.
+- **Elevation.** Raw reads need administrator rights. The app never elevates silently: **Restart as administrator** starts the same executable through the Windows UAC prompt, using a fixed command line with no renderer-supplied input.
+
 ### File-system safety on the PC
 
 - **The renderer cannot name arbitrary paths.**

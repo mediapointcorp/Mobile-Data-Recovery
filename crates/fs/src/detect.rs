@@ -190,9 +190,8 @@ pub fn identify_volume(
                 v.notes.push("exFAT (common on SD cards > 32 GB): identified; deleted-record parsing not yet implemented — covered by raw carving".into());
             }
             _ => {
-                v.support = SupportLevel::IdentificationOnly;
-                v.notes
-                    .push("NTFS: identified only — covered by raw carving".into());
+                v.support = SupportLevel::DeletedRecordRecovery;
+                v.notes.push("NTFS: live and deleted MFT records are parsed; deleted files are read through their preserved run lists (fragmented files included) and validated".into());
             }
         }
         return v;

@@ -3,6 +3,7 @@
 // channels registered below.
 
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from "electron";
+import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -61,6 +62,24 @@ function registerIpc(): void {
     const res = await worker.call<{ root: string }>("case.open", { path: dir });
     caseRoot = res.root;
     return res;
+  });
+  handle("drives:list", async () => {
+    const r = await worker.call<{ elevated: boolean; drives: { id: string }[] }>("drives.list", {});
+    // Only drives the worker listed may be scanned.
+    for (const d of r.drives) granted.grant("drive", d.id);
+    return r;
+  });
+  handle("app:relaunchAdmin", () => {
+    if (process.platform !== "win32") throw new ValidationError("only available on Windows");
+    // Fixed command: start this same executable elevated (UAC prompt), then quit.
+    const exe = process.execPath.replace(/'/g, "''");
+    const args = process.defaultApp ? ` -ArgumentList '${app.getAppPath().replace(/'/g, "''")}'` : "";
+    spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `Start-Process -FilePath '${exe}'${args} -Verb RunAs`], {
+      detached: true,
+      windowsHide: true,
+      stdio: "ignore",
+    }).unref();
+    setTimeout(() => app.quit(), 500);
   });
   handle("image:choose", async () => {
     const r = await dialog.showOpenDialog(win!, {

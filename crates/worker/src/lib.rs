@@ -6,6 +6,7 @@
 
 pub mod case;
 pub mod classify;
+pub mod drives;
 pub mod finalize;
 pub mod jobs;
 pub mod report;

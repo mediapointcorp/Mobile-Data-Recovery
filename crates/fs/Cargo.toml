@@ -9,6 +9,11 @@ rust-version.workspace = true
 pr-model.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+time.workspace = true
 
 [dev-dependencies]
+flate2 = "1"
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
 pr-testkit.workspace = true

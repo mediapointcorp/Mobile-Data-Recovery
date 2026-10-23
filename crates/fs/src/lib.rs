@@ -4,8 +4,9 @@
 //!    volume's filesystem *before* anything is parsed, and records
 //!    encryption indicators.
 //! 2. Only validated formats are parsed for deleted records. Currently:
-//!    FAT12/16/32 ([`fat`]). ext4, F2FS, exFAT, NTFS are identified and
-//!    reported, and their space is still covered by raw carving.
+//!    FAT12/16/32 ([`fat`]) and NTFS ([`ntfs`], from the MFT). ext4, F2FS
+//!    and exFAT are identified and reported, and their space is still
+//!    covered by raw carving.
 //!
 //! Why ext4/F2FS deleted-record recovery is not offered: on deletion ext4
 //! zeroes the inode's extent tree (and Android userdata is file-based
@@ -15,6 +16,7 @@
 
 pub mod detect;
 pub mod fat;
+pub mod ntfs;
 
 pub use detect::{
     analyze_layout, EncryptionState, ImageLayout, PartitionScheme, SupportLevel, VolumeKind,

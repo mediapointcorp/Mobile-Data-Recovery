@@ -235,6 +235,21 @@ impl Server {
                 *self.case.lock().unwrap() = Some(c);
                 Ok(v)
             }
+            "drives.list" => {
+                let root = self.case.lock().unwrap().as_ref().map(|c| c.root.clone());
+                let list: Vec<Value> = crate::drives::list()
+                    .into_iter()
+                    .map(|d| {
+                        let holds_case = root
+                            .as_ref()
+                            .is_some_and(|r| crate::drives::path_on_drive(r, &d.id));
+                        let mut v = serde_json::to_value(&d).unwrap_or_default();
+                        v["holds_case"] = json!(holds_case);
+                        v
+                    })
+                    .collect();
+                Ok(json!({ "elevated": crate::drives::is_elevated(), "drives": list }))
+            }
             "adb.status" => {
                 let p: AdbParam = Self::p(params)?;
                 match jobs::device::client(p.adb_path.as_deref()) {

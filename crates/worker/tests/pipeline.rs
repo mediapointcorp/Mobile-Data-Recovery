@@ -92,6 +92,8 @@ fn scan_params(ev: &Path, mode: EvidenceMode) -> JobParams {
         filesystem_analysis: true,
         carve: true,
         chunk_size_mib: Some(1),
+        carve_scope: Default::default(),
+        include_existing: true,
     })
 }
 

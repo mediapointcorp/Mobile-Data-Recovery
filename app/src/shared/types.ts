@@ -99,7 +99,24 @@ export type WorkerEvent =
   | { event: "worker.exit"; code: number | null; message: string };
 
 /** Job parameters the UI may submit. Paths are tokens returned by dialogs. */
+export interface DriveInfo {
+  id: string;
+  device_path: string;
+  kind: "volume" | "disk";
+  label: string | null;
+  filesystem: string | null;
+  size: number | null;
+  free: number | null;
+  drive_type: string;
+  ssd: boolean | null;
+  trim: boolean | null;
+  is_system: boolean;
+  holds_case: boolean;
+  notes: string[];
+}
+
 export type StartJob =
+  | { kind: "drive_scan"; drive: string; all_space: boolean; include_existing: boolean }
   | { kind: "image_scan"; image: string; working_copy: boolean; formats: string[]; filesystem_analysis: boolean; carve: boolean }
   | { kind: "local_scan"; dir: string }
   | { kind: "device_acquire"; serial: string }
@@ -108,6 +125,9 @@ export type StartJob =
 /** API exposed by the preload script on `window.photoRecovery`. */
 export interface PhotoRecoveryApi {
   chooseCase(): Promise<{ root: string } | null>;
+  drives(): Promise<{ elevated: boolean; drives: DriveInfo[] }>;
+  relaunchAsAdmin(): Promise<void>;
+  platform(): string;
   chooseImage(): Promise<string | null>;
   chooseFolder(): Promise<string | null>;
   chooseExportFolder(): Promise<string | null>;

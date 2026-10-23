@@ -1,16 +1,22 @@
 # PhotoRecovery
 
-PhotoRecovery recovers photos from Android phones (especially realme devices) connected to a Windows PC over USB, and from raw storage images. It is careful about forensics: it reads evidence only, hashes it before and after analysis, and labels every result by how it was obtained.
+PhotoRecovery recovers deleted photos on Windows. It scans the PC's own drives (hard disks, SSDs, USB sticks, memory cards) and raw storage images, and it can also copy photos from Android phones connected over USB. It is careful about forensics: it never writes to the source, records hashes and an audit trail, and labels every result by how it was obtained.
 
-> **Recovery is never guaranteed.** Deleted photos can be recovered only when their data is still present, readable and not encrypted. On modern Android phones, internal storage uses file-based encryption, so deleted photos in internal storage generally **cannot** be recovered by any tool that lacks the keys. PhotoRecovery reports these limitations instead of producing anything that looks like a recovery.
+> **Recovery is never guaranteed.** Deleted photos can be recovered only when their data is still present, readable and not encrypted.
+> - **Hard disks, USB sticks, memory cards:** good chances until the space is reused.
+> - **SSDs:** Windows' TRIM usually makes the SSD erase deleted data within minutes, so chances are low.
+> - **Modern Android phones:** internal storage is encrypted, so deleted photos there generally **cannot** be recovered by any tool.
+>
+> PhotoRecovery reports these limits instead of producing anything that looks like a recovery.
 
 ## What it does
 
 | Source | What you get | Classification |
 |---|---|---|
+| **PC drive** (`C:`, `D:`, USB stick, memory card, or a whole disk), scanned in place; needs administrator rights | Deleted NTFS and FAT files restored from their filesystem records, fragmented NTFS files included. Then carving of the drive's free space only, so photos that still exist aren't listed | Deleted-file record, Carved image, Partial image, Thumbnail, Unavailable source data |
 | Android phone over ADB (no root) | Copies of every accessible image in shared storage (`/sdcard`, SD cards), including hidden folders, thumbnail caches, app media and the Android 11+ system trash (`.trashed-*`) | Existing original / Existing duplicate / Thumbnail |
 | Backup or copy folder on the PC | The same search over a local folder | Existing original / duplicate / Thumbnail |
-| Raw image (SD-card dump, `dd` image, acquired partition) | Filesystem analysis (live and deleted FAT entries), then structure-aware carving of unallocated and all other data | Deleted-file record, Carved image, Partial image, Thumbnail, Unverified candidate, Unavailable source data |
+| Raw image (SD-card dump, `dd` image, acquired partition) | Filesystem analysis (live and deleted FAT and NTFS entries), then structure-aware carving of the whole image | Deleted-file record, Carved image, Partial image, Thumbnail, Unverified candidate, Unavailable source data |
 | Rooted, authorized **test** device (advanced) | A read-only `dd` image of a chosen partition, which you then scan as a raw image | — (it becomes evidence) |
 
 Every result records its source, method, format, offset, length, dimensions, SHA-256, perceptual hash, validation status, classification, output path, warnings, limitations and associations (duplicate of, similar to, thumbnail of, embedded in).
@@ -23,7 +29,7 @@ Every result records its source, method, format, offset, length, dimensions, SHA
 └──────────────────────────────────────────────────────────────────────────┼─┘
                                                                            ▼
 ┌────────────────────────── photorecovery-worker (Rust) ────────────────────────┐
-│ jobs: image scan · device acquire · folder scan · partition acquire (root)    │
+│ jobs: drive scan · image scan · device acquire · folder scan · partition (root)│
 │ pr-adb ─ pr-fs ─ pr-carve ─ pr-validate ─ pr-model (results, evidence, audit) │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -48,11 +54,21 @@ powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Installer
 
 To connect a phone, see [docs/USB_ADB_SETUP.md](docs/USB_ADB_SETUP.md). It covers enabling USB debugging on realme UI.
 
+### Recovering deleted photos from this PC
+
+1. Stop saving files to the drive that held the photos.
+2. Start PhotoRecovery **as administrator**. Right-click → *Run as administrator*, or use the **Restart as administrator** button on the *This PC* screen. Windows only lets administrators read a drive directly. PhotoRecovery only reads it.
+3. Click **Open / create case** and choose a folder on a **different** drive, for example a USB disk. The app refuses to scan the drive that holds the case folder, because writing there could overwrite the photos you want back.
+4. On **This PC**, click **Scan for deleted photos** next to the drive.
+5. When the job completes, open **Results**. *Deleted-file record* results are complete files restored from the filesystem. *Carved* and *Partial* results came from free space.
+
 ### Command line
 
 The worker is also a complete CLI:
 
 ```text
+photorecovery-worker drives
+photorecovery-worker scan-drive --case E:\Cases\pc1 --drive D:            # run in an administrator terminal
 photorecovery-worker devices
 photorecovery-worker device-info --serial <SERIAL>
 photorecovery-worker acquire-device --case D:\Cases\phone1 --serial <SERIAL>
@@ -81,7 +97,7 @@ cargo run --release -p photorecovery-worker -- report --case "$PWD/cases/demo"
 1. Discover accessible existing originals (device shared storage, backup folders).
 2. Search copies, the system trash, thumbnail caches and `.thumbdata` containers. Containers are carved.
 3. Acquire supported evidence without modification: hash-verified `adb pull`, read-only image access, or read-only `dd` on rooted test devices.
-4. Identify the partition table and filesystems. Parse supported filesystem metadata: FAT12/16/32 live and deleted entries.
+4. Identify the partition table and filesystems. Parse supported filesystem metadata: FAT12/16/32 directory entries, and NTFS MFT records with their preserved run lists.
 5. Carve raw data for JPEG (fully), PNG, WebP and HEIC/AVIF (structure only).
 6. Validate (structure walk **and** decode), hash, deduplicate, link thumbnails, classify.
 7. Export to a separate folder with a verified manifest, and generate the recovery and evidence-integrity report.
@@ -93,7 +109,7 @@ crates/
   model/     result model, read-only sources, evidence hashing, hash-chained audit log
   carve/     streaming resumable scanner + JPEG/PNG/WebP/HEIF structure parsers
   validate/  structural + decode validation, SHA-256, dHash, EXIF, dedupe, thumbnail matching
-  fs/        GPT/MBR, filesystem identification, encryption hints, FAT deleted-entry recovery
+  fs/        GPT/MBR, filesystem identification, encryption hints, FAT and NTFS deleted-file recovery
   adb/       allowlisted read-only ADB operations, discovery classification
   worker/    jobs, checkpoints, JSON-lines service, CLI, reports, export
   testkit/   deterministic fixtures: real JPEG/PNG/WebP encodes, FAT32 builder, ground-truth disks
@@ -119,6 +135,8 @@ The tests cover:
 - truncated, corrupted, fragmented and spliced files, and fake signatures;
 - duplicates and thumbnail-only scenarios;
 - FAT live, deleted, overwritten and fragmented-deleted files;
+- NTFS on a **real** volume made by `mkntfs`, with files deleted by the `ntfs-3g` driver: live, deleted, fragmented (7+ runs) and overwritten. The independent `ntfsundelete` tool is used as a reference;
+- drive-scan mode: free-space-only carving, deleted-only reporting, aligned raw-device reads, and refusal when the case folder is on the scanned drive;
 - unsupported (ext4/F2FS), encrypted (LUKS, high-entropy) and sparse sources;
 - interrupted and resumed scans, which must produce identical results;
 - evidence hashes before and after analysis, and audit-chain tamper detection;
@@ -137,7 +155,9 @@ The tests cover:
 
 ## Status
 
-Version 0.1.0 includes a working JPEG carver, PNG/WebP/HEIF structure carving, FAT record recovery, ADB acquisition and the desktop UI. **None of this has been validated on physical realme hardware yet.** ADB behaviour is covered by unit tests with recorded command output, and all recovery metrics come from synthetic ground truth. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for what that does and does not show.
+Version 0.1.0 includes PC drive scanning, NTFS and FAT deleted-file recovery, a working JPEG carver, PNG/WebP/HEIF structure carving, ADB acquisition and the desktop UI.
+- NTFS parsing is tested against real NTFS volumes, and in CI against the live Windows system drive.
+- Phone acquisition **has not been validated on physical phones yet**. ADB behaviour is covered by unit tests with recorded command output, and all recovery metrics come from synthetic ground truth. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for what that does and does not show.
 
 ## License
 

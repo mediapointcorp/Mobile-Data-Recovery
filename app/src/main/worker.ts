@@ -16,6 +16,7 @@ interface Pending {
 
 const WORKER_METHODS = new Set([
   "tool.version",
+  "drives.list",
   "case.open",
   "adb.status",
   "adb.devices",

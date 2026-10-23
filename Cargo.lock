@@ -461,6 +461,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "flate2",
  "pr-adb",
  "pr-carve",
  "pr-fs",
@@ -471,6 +472,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uuid",
+ "windows-sys",
 ]
 
 [[package]]
@@ -545,10 +547,15 @@ dependencies = [
 name = "pr-fs"
 version = "0.1.0"
 dependencies = [
+ "flate2",
+ "hex",
  "pr-model",
  "pr-testkit",
  "serde",
+ "serde_json",
+ "sha2",
  "thiserror",
+ "time",
 ]
 
 [[package]]
@@ -563,6 +570,7 @@ dependencies = [
  "thiserror",
  "time",
  "uuid",
+ "windows-sys",
 ]
 
 [[package]]

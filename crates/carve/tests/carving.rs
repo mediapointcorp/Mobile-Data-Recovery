@@ -332,3 +332,48 @@ fn truncated_heif_and_png_are_partial() {
     let f = run(&data, 1 << 20);
     assert!(f.iter().all(|x| x.candidate.status != EndStatus::Complete));
 }
+
+#[test]
+fn ranges_restrict_where_files_may_start() {
+    let mut d = DiskBuilder::new(9);
+    let mut placed = vec![];
+    for i in 0..4u64 {
+        d.random(5000);
+        let j = images::jpeg(96, 64, 50 + i, &JpegOpts::default());
+        placed.push((d.pos(), j.len() as u64));
+        d.place(Scenario::Intact, ImageFormat::Jpeg, &j, 96, 64);
+    }
+    d.random(5000);
+    let (data, _) = d.finish();
+    let src = MemSource::new(data);
+    // Files 1 and 3 start inside the ranges; file 3's range ends mid-file
+    // and it must still be carved completely.
+    let ranges = vec![
+        (placed[1].0 - 100, placed[1].0 + 10),
+        (placed[3].0, placed[3].0 + 1),
+    ];
+    let cfg = ScanConfig {
+        chunk_size: 4096,
+        ranges: Some(ranges),
+        ..Default::default()
+    };
+    let mut sink = VecSink::default();
+    assert_eq!(
+        scan(
+            &src,
+            &cfg,
+            &mut ScanState::default(),
+            &new_cancel_flag(),
+            &mut sink
+        )
+        .unwrap(),
+        ScanOutcome::Completed
+    );
+    let offs: Vec<(u64, u64)> = sink
+        .found
+        .iter()
+        .map(|f| (f.candidate.offset, f.candidate.length))
+        .collect();
+    assert_eq!(offs, vec![placed[1], placed[3]]);
+    assert!(sink.checkpoints >= 1);
+}

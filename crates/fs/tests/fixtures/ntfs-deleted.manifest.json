@@ -1,0 +1,42 @@
+[
+  {
+    "path": "/DCIM/Camera/IMG_0000.jpg",
+    "scenario": "live",
+    "sha256": "bdd12a8f33f686be0d240063317afeb1a0d97b0cbe90b159303f877c4bc5ffec"
+  },
+  {
+    "path": "/DCIM/Camera/IMG_0001.jpg",
+    "scenario": "live",
+    "sha256": "124c0a36dfd0f535e5fb218cd2831e596825cd71255334821c19507d1a527261"
+  },
+  {
+    "path": "/DCIM/Camera/IMG_0002.jpg",
+    "scenario": "live",
+    "sha256": "8a8cee8ae79c43d925289cdeeffc8357662ca700ab9430a4bd4da13ede7f932c"
+  },
+  {
+    "path": "/DCIM/Camera/IMG_0003.jpg",
+    "scenario": "deleted",
+    "sha256": "1fa11b11a6b366584247e22e11a3765fa20b231c749356585fc3f6ec7e1ca07b"
+  },
+  {
+    "path": "/DCIM/Camera/IMG_0004.jpg",
+    "scenario": "deleted",
+    "sha256": "f868b06ac3e4428796d56ea148af237f70d4f46cc9daa59f40ea9abb15c16880"
+  },
+  {
+    "path": "/DCIM/Camera/IMG_0005.jpg",
+    "scenario": "deleted",
+    "sha256": "60ca65b70c5bc9a135faa5a8cace626ddc794c228da18f0c69ac882214afa8d3"
+  },
+  {
+    "path": "/DCIM/Camera/IMG_0006.jpg",
+    "scenario": "deleted_fragmented",
+    "sha256": "7c2370f839e30fceb2323f49e32bfc4b740505d92f074ecaf2cf8c9642ab3028"
+  },
+  {
+    "path": "/DCIM/Camera/IMG_0007.jpg",
+    "scenario": "deleted_overwritten",
+    "sha256": "4ef21c580e20e121fb8eb88ef1d3b74a115bffe4f437fb0e16db2bb1229cc299"
+  }
+]

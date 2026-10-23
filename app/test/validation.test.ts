@@ -44,3 +44,13 @@ test("preview paths cannot escape the case", () => {
     assert.equal(safeRelative(bad), null, bad);
   }
 });
+
+test("drive scans only accept drives the worker listed", () => {
+  const g = new GrantedPaths();
+  const job = { kind: "drive_scan", drive: "D:", all_space: false, include_existing: false };
+  assert.throws(() => toWorkerJob(job, g), ValidationError);
+  g.grant("drive", "D:");
+  assert.deepEqual(toWorkerJob(job, g), { kind: "drive_scan", drive: "D:", carve_scope: "unallocated", include_existing: false });
+  assert.equal(toWorkerJob({ ...job, all_space: true }, g).carve_scope, "all");
+  assert.throws(() => toWorkerJob({ ...job, drive: "\\\\.\\C:" }, g), ValidationError);
+});

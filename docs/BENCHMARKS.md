@@ -76,6 +76,17 @@ Fragmented files are **never** reported as byte-identical. The part before the f
 | deleted, clusters reused by another file | 10 | 0 | 0 | 10 | 0 |
 | deleted, fragmented (interleaved with another file) | 10 | 0 | 10 | 0 | 0 |
 
+### NTFS deleted-file recovery (real volume)
+
+The fixture is `crates/fs/tests/fixtures/ntfs-deleted.img.gz`. It is a 12 MB volume made with `mkntfs`; files were written and deleted through the real `ntfs-3g` driver by `make_ntfs_fixture.sh`. The independent `ntfsundelete` tool reports IMG_0003–0006 as 100% recoverable.
+
+| Scenario | Files | PhotoRecovery result |
+|---|---|---|
+| live | 3 | byte-identical (image scan) / not reported (drive scan, deleted-only) |
+| deleted, clusters untouched | 3 | byte-identical, original path and timestamps |
+| deleted, fragmented (7+ data runs) | 1 | byte-identical, run list followed |
+| deleted, MFT record and clusters reused | 1 | not claimed |
+
 ### Scaling
 
 Same harness, `--pad-mb 1500 --jpegs 48 --seed 7`: a 1619.9 MB image scanned at 2238 MB/s, with peak memory 11.9 MiB. Memory does not grow with image size.
@@ -107,7 +118,9 @@ Same harness, `--pad-mb 1500 --jpegs 48 --seed 7`: a 1619.9 MB image scanned at 
 
 1. **No fragment reassembly.** Fragmented files yield the first fragment as a partial image. Bifragment gap carving is a possible future addition, but it would be labelled separately and never as an original.
 2. **HEIC/AVIF** are validated structurally only (box walk and `iloc` extents). The bundled decoders cannot decode HEVC/AV1, so these results are *Unverified candidates*. HEIC is not previewed in the UI (AVIF previews depend on Chromium's decoder). They are exported intact.
-3. **exFAT, ext4, F2FS, NTFS**: identification only, with no deleted-record parsing. Their space is still carved.
+3. **exFAT, ext4, F2FS**: identification only, with no deleted-record parsing. Their space is still carved. Memory cards and USB sticks over 32 GB are usually exFAT; on them, deleted photos are found by carving only, so fragmented ones come back partial.
+10. **SSDs.** On SSDs with TRIM (almost all modern Windows PCs), deleted clusters usually read back as zeros within minutes. NTFS records still list such files, but they are reported as *Unavailable* ("clusters now read as zeros"), never as recovered.
+11. **NTFS scope.** Only files with image extensions are examined through the MFT. Photos renamed to other extensions are found by carving. Live drives change during the scan, so results reflect the moment each part was read.
 4. **Android sparse, E01, AFF4, VHD and split raw images** need conversion to a single raw image first.
 5. **Thumbnail size heuristic.** A complete carved image whose longest side is ≤ 320 px is classified as a thumbnail. Genuine small originals (stickers, icons) will be labelled thumbnails, with a warning saying why.
 6. **dHash similarity** misses heavily cropped thumbnails, such as square centre crops. They stay unlinked rather than being linked wrongly.

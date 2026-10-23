@@ -217,6 +217,26 @@ impl<'a> FatVolume<'a> {
         self.fat.get(c as usize).is_some_and(|&v| v != 0)
     }
 
+    /// Volume-relative byte ranges that are allocated now: the reserved
+    /// area, FATs and root directory, plus every cluster in use.
+    pub fn allocated_extents(&self) -> Vec<(u64, u64)> {
+        let mut out = vec![(0, self.geo.cluster_offset(2))];
+        let end = self.geo.cluster_count + 2;
+        let mut c = 2u32;
+        while c < end {
+            if self.fat[c as usize] != 0 {
+                let start = c;
+                while c < end && self.fat[c as usize] != 0 {
+                    c += 1;
+                }
+                out.push((self.geo.cluster_offset(start), self.geo.cluster_offset(c)));
+            } else {
+                c += 1;
+            }
+        }
+        out
+    }
+
     /// Follow a live cluster chain (with loop and bounds protection).
     pub fn chain(&self, first: u32, max: usize) -> Vec<u32> {
         let mut out = Vec::new();

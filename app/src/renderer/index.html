@@ -18,7 +18,8 @@
     </header>
     <div class="layout">
       <nav class="sidebar" aria-label="Sections">
-        <button data-view="device" class="nav active">Android device</button>
+        <button data-view="pc" class="nav active">This PC</button>
+        <button data-view="device" class="nav">Android device</button>
         <button data-view="image" class="nav">Storage image</button>
         <button data-view="folder" class="nav">Backup folder</button>
         <button data-view="jobs" class="nav">Jobs <span id="jobs-badge" class="badge hidden"></span></button>
@@ -30,7 +31,29 @@
         </div>
       </nav>
       <main id="main">
-        <section id="view-device" class="view">
+        <section id="view-pc" class="view">
+          <h1>Recover deleted photos from this PC</h1>
+          <p class="muted">
+            Scans a drive in place: hard disk, SSD, USB stick or memory card. Deleted NTFS/FAT files are restored from
+            their filesystem records where possible, then free space is searched for photo data.
+          </p>
+          <div class="card note-card">
+            <strong>Before you start:</strong> stop saving files to the drive you want to recover from. The case folder
+            (top right) must be on a <em>different</em> drive, for example a USB disk.
+          </div>
+          <div id="admin-banner" class="card hidden"></div>
+          <div class="row">
+            <button id="btn-refresh-drives">Refresh drives</button>
+            <label><input type="checkbox" id="opt-all-space" /> Search the whole drive, not only free space (slower)</label>
+            <label><input type="checkbox" id="opt-existing" /> Also list photos that still exist</label>
+          </div>
+          <table class="table" id="drive-table">
+            <thead><tr><th>Drive</th><th>Name</th><th>Type</th><th>Size</th><th>Notes</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <section id="view-device" class="view hidden">
           <h1>Android device (USB / ADB)</h1>
           <div class="card" id="adb-status">Checking for adb…</div>
           <div class="row">

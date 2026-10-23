@@ -6,6 +6,9 @@ import type { Classification, PhotoRecoveryApi, StartJob, WorkerEvent } from "..
 
 const api: PhotoRecoveryApi = {
   chooseCase: () => ipcRenderer.invoke("case:choose"),
+  drives: () => ipcRenderer.invoke("drives:list"),
+  relaunchAsAdmin: () => ipcRenderer.invoke("app:relaunchAdmin"),
+  platform: () => process.platform,
   chooseImage: () => ipcRenderer.invoke("image:choose"),
   chooseFolder: () => ipcRenderer.invoke("folder:choose"),
   chooseExportFolder: () => ipcRenderer.invoke("export:choose"),

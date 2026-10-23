@@ -27,6 +27,12 @@ pub struct ScanConfig {
     pub limits: CarveLimits,
     /// Absolute offset at which scanning stops (default: end of source).
     pub end_offset: Option<u64>,
+    /// Only look for file *starts* inside these sorted, non-overlapping
+    /// `[start, end)` ranges (e.g. a filesystem's unallocated clusters).
+    /// Parsers still read past a range end, since a deleted file can
+    /// continue into clusters that were later reused.
+    #[serde(default)]
+    pub ranges: Option<Vec<(u64, u64)>>,
 }
 
 impl Default for ScanConfig {
@@ -36,6 +42,7 @@ impl Default for ScanConfig {
             chunk_size: 8 * 1024 * 1024,
             limits: CarveLimits::default(),
             end_offset: None,
+            ranges: None,
         }
     }
 }
@@ -207,16 +214,30 @@ pub fn scan(
         if is_cancelled(cancel) {
             return Ok(ScanOutcome::Cancelled);
         }
+        let mut range_end = end;
+        if let Some(ranges) = &cfg.ranges {
+            let i = ranges.partition_point(|r| r.1 <= state.next_offset);
+            let rs_re = ranges.get(i).copied().filter(|r| r.0 < end);
+            let Some((rs, re)) = rs_re else {
+                state.next_offset = end;
+                sink.on_checkpoint(state, end)?;
+                break;
+            };
+            if rs > state.next_offset {
+                state.next_offset = rs;
+            }
+            range_end = re.min(end);
+        }
         let pos = state.next_offset;
         // Skip the interior of a carved file when no embedded window remains.
         if state.covered_until > pos && state.embedded_windows.iter().all(|w| w.1 <= pos) {
-            let to = state.covered_until.min(end);
+            let to = state.covered_until.min(range_end);
             state.stats.bytes_scanned += to - pos;
             state.next_offset = to;
             state.embedded_windows.clear();
             continue;
         }
-        let region_end = (pos + chunk as u64).min(end);
+        let region_end = (pos + chunk as u64).min(range_end);
         let region_len = (region_end - pos) as usize;
         let want = (region_len + OVERLAP).min((src.len() - pos) as usize);
         let n = read_full_at(src, pos, &mut buf[..want])?;

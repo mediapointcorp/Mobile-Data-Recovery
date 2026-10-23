@@ -82,3 +82,6 @@ h2 { font-size: 16px; margin: 0 0 8px; }
 .toast { position: fixed; bottom: 18px; right: 18px; max-width: 520px; background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 6px; padding: 10px 14px; box-shadow: 0 4px 18px rgba(0,0,0,0.2); }
 .toast.error { border-left-color: var(--danger); }
 .advanced summary { cursor: pointer; font-weight: 600; }
+.small { font-size: 12px; }
+.note-card { border-left: 4px solid var(--warn); }
+#drive-table td { vertical-align: top; }
