@@ -96,7 +96,12 @@ impl RawDevice {
             )
         };
         if ok == 0 {
-            return Err(io::Error::last_os_error());
+            let err = io::Error::last_os_error();
+            // Not a disk or volume (e.g. an image file): use its file size.
+            return match file.metadata() {
+                Ok(m) if m.is_file() => Ok(RawDevice { len: m.len(), file }),
+                _ => Err(err),
+            };
         }
         Ok(RawDevice {
             file,
