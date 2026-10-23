@@ -3,9 +3,9 @@ resolver = "2"
 members = [
     "crates/model",
     "crates/carve",
-    # "crates/validate",
-    # "crates/fs",
-    # "crates/adb",
+    "crates/validate",
+    "crates/fs",
+    "crates/adb",
     # "crates/worker",
     "crates/testkit",
 ]

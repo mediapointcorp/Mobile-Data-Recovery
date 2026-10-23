@@ -1,0 +1,15 @@
+[package]
+name = "pr-fs"
+description = "PhotoRecovery filesystem identification and deleted-record recovery"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pr-model.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pr-testkit.workspace = true
