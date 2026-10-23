@@ -99,13 +99,34 @@ impl EvidenceRecord {
 /// Ensure `dest` is not the evidence file and not located inside a source
 /// directory that is being scanned.
 pub fn check_destination(dest: &Path, evidence: &Path) -> Result<(), EvidenceError> {
-    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-    let d = canon(dest);
-    let e = canon(evidence);
+    let d = canonicalize_lenient(dest);
+    let e = canonicalize_lenient(evidence);
     if d == e || (e.is_dir() && d.starts_with(&e)) {
         return Err(EvidenceError::UnsafeDestination(dest.display().to_string()));
     }
     Ok(())
+}
+
+/// Canonicalize a path that may not exist yet: canonicalize the nearest
+/// existing ancestor and re-append the remaining components. Comparing a
+/// canonical path with a non-canonical one is unreliable (on Windows,
+/// canonical paths carry a `\\?\` prefix), so both sides of every
+/// containment check must go through this.
+pub fn canonicalize_lenient(p: &Path) -> PathBuf {
+    let mut existing = p;
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(c) = existing.canonicalize() {
+            return rest.iter().rev().fold(c, |acc, part| acc.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return p.to_path_buf(),
+        }
+    }
 }
 
 /// Hash the evidence and (optionally) create a verified working copy.
@@ -250,5 +271,7 @@ mod tests {
         assert!(check_destination(&ev, &ev).is_err());
         assert!(check_destination(&dir.path().join("sub"), dir.path()).is_err());
         assert!(check_destination(&dir.path().join("out"), &ev).is_ok());
+        // Not-yet-existing nested destination inside an evidence folder.
+        assert!(check_destination(&dir.path().join("a").join("b"), dir.path()).is_err());
     }
 }
