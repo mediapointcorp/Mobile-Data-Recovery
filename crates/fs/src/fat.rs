@@ -299,7 +299,7 @@ impl<'a> FatVolume<'a> {
         };
         let mut lfn: Vec<(u8, Vec<u16>)> = Vec::new();
         let mut subdirs = Vec::new();
-        for (i, e) in bytes.chunks_exact(32).enumerate() {
+        for (i, e) in bytes.as_chunks::<32>().0.iter().enumerate() {
             if e[0] == 0x00 {
                 break; // never used: end of directory
             }
