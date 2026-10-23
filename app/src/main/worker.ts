@@ -17,19 +17,11 @@ interface Pending {
 const WORKER_METHODS = new Set([
   "tool.version",
   "drives.list",
-  "case.open",
-  "adb.status",
-  "adb.devices",
-  "adb.deviceInfo",
-  "adb.listPartitions",
-  "job.start",
-  "job.resume",
-  "job.cancel",
-  "job.list",
-  "results.finalize",
-  "results.list",
-  "export.run",
-  "report.generate",
+  "scan.start",
+  "scan.cancel",
+  "scan.results",
+  "scan.preview",
+  "scan.recover",
 ]);
 
 export function locateWorker(resourcesPath: string, appPath: string): string {

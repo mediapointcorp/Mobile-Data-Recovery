@@ -1,29 +1,26 @@
-//! JSON-lines service over stdin/stdout.
+//! JSON-lines service over stdin/stdout, used by the desktop app.
 //!
-//! The desktop UI spawns the worker as a child process and is its only
-//! client; there is no socket or port. Each request is one line:
-//! `{"id": 1, "method": "job.start", "params": {...}}`. Responses carry the
-//! same `id` with `result` or `error`; asynchronous notifications carry
-//! `event` instead of `id`. Only the methods matched in [`Server::dispatch`]
-//! exist; parameters are strictly typed (`deny_unknown_fields`).
+//! The app spawns the worker as a child process and is its only client;
+//! there is no socket or port. Each request is one line:
+//! `{"id": 1, "method": "scan.start", "params": {...}}`. Responses carry
+//! the same `id` with `result` or `error`; notifications carry `event`.
+//! Only the methods in [`Server::dispatch`] exist, and parameters are
+//! strictly typed (`deny_unknown_fields`).
 
-use crate::case::Case;
-use crate::finalize;
-use crate::jobs::{self, JobParams, JobRecord, JobStatus};
-use crate::report;
-use crate::Progress;
+use crate::drives;
+use crate::recover::{self, FoundFile, ScanRequest, ScanSummary, State};
 use anyhow::{anyhow, bail, Result};
-use pr_model::model::Classification;
+use pr_model::source::ReadAt;
 use pr_model::{new_cancel_flag, CancelFlag};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashSet;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 const MAX_LINE: usize = 1024 * 1024;
 
 #[derive(Deserialize)]
@@ -36,68 +33,39 @@ struct Request {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PathParam {
-    path: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AdbParam {
-    #[serde(default)]
-    adb_path: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SerialParam {
-    serial: String,
-    #[serde(default)]
-    adb_path: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RootParam {
-    serial: String,
-    confirmation: String,
-    #[serde(default)]
-    adb_path: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JobStart {
-    params: JobParams,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JobId {
-    job_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ResultsList {
+struct ResultsQuery {
     #[serde(default)]
     offset: usize,
     #[serde(default = "default_limit")]
     limit: usize,
+    /// `name`, `path`, `size`, `modified`, `state`.
     #[serde(default)]
-    classification: Option<Classification>,
+    sort: Option<String>,
+    #[serde(default)]
+    descending: bool,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    states: Option<Vec<State>>,
 }
 
 fn default_limit() -> usize {
-    500
+    1000
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ExportParams {
+struct IdParam {
+    id: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoverParams {
+    ids: Vec<u64>,
     dest: String,
-    classifications: Vec<Classification>,
     #[serde(default)]
-    include_duplicates: bool,
+    keep_folders: bool,
 }
 
 type Out = Arc<Mutex<Box<dyn Write + Send>>>;
@@ -109,23 +77,10 @@ fn emit(out: &Out, v: &Value) {
     let _ = w.flush();
 }
 
-struct EventProgress {
-    out: Out,
-    last: Mutex<Instant>,
-}
-
-impl Progress for EventProgress {
-    fn report(&self, job_id: &str, phase: &str, done: u64, total: u64, message: &str) {
-        let mut last = self.last.lock().unwrap_or_else(|p| p.into_inner());
-        if last.elapsed() < Duration::from_millis(150) && done < total {
-            return;
-        }
-        *last = Instant::now();
-        emit(
-            &self.out,
-            &json!({ "event": "job.progress", "job_id": job_id, "phase": phase, "done": done, "total": total, "message": message }),
-        );
-    }
+#[derive(Default)]
+struct Session {
+    files: Vec<FoundFile>,
+    summary: Option<ScanSummary>,
 }
 
 struct Running {
@@ -135,16 +90,19 @@ struct Running {
 
 pub struct Server {
     out: Out,
-    case: Mutex<Option<Case>>,
-    running: Mutex<HashMap<String, Running>>,
+    session: Arc<Mutex<Session>>,
+    running: Mutex<Option<Running>>,
+    /// Drives listed by `drives.list` — the only drives a scan may open.
+    listed: Mutex<HashSet<String>>,
 }
 
 impl Server {
     pub fn new(out: Box<dyn Write + Send>) -> Arc<Server> {
         Arc::new(Server {
             out: Arc::new(Mutex::new(out)),
-            case: Mutex::new(None),
-            running: Mutex::new(HashMap::new()),
+            session: Arc::new(Mutex::new(Session::default())),
+            running: Mutex::new(None),
+            listed: Mutex::new(HashSet::new()),
         })
     }
 
@@ -177,9 +135,9 @@ impl Server {
                 }
             };
             if req.method == "shutdown" {
-                self.cancel_all();
+                self.stop_scan();
                 emit(&self.out, &json!({ "id": req.id, "result": true }));
-                break;
+                return Ok(());
             }
             let resp = match self.dispatch(&req.method, req.params) {
                 Ok(v) => json!({ "id": req.id, "result": v }),
@@ -189,31 +147,30 @@ impl Server {
             };
             emit(&self.out, &resp);
         }
-        self.cancel_all();
+        self.stop_scan();
         Ok(())
     }
 
-    fn cancel_all(&self) {
-        let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        for r in running.values() {
+    fn stop_scan(&self) {
+        if let Some(r) = self.running.lock().unwrap().take() {
             r.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        for (_, r) in running.drain() {
             let _ = r.handle.join();
         }
     }
 
-    fn case(&self) -> Result<Case> {
-        self.case
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or_else(|| anyhow!("no case is open"))
+    fn p<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
+        Ok(serde_json::from_value(if v.is_null() {
+            json!({})
+        } else {
+            v
+        })?)
     }
 
-    fn p<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
-        let v = if v.is_null() { json!({}) } else { v };
-        Ok(serde_json::from_value(v)?)
+    fn open_drive(id: &str) -> Result<Arc<dyn ReadAt>> {
+        let path = drives::device_path(id)?;
+        Ok(Arc::new(
+            pr_model::device::open_device(&path).map_err(|e| anyhow!("cannot open {id}: {e}"))?,
+        ))
     }
 
     pub fn dispatch(self: &Arc<Self>, method: &str, params: Value) -> Result<Value> {
@@ -221,176 +178,168 @@ impl Server {
             "tool.version" => Ok(
                 json!({ "tool": pr_model::TOOL_NAME, "version": pr_model::TOOL_VERSION, "protocol": PROTOCOL_VERSION }),
             ),
-            "case.open" => {
-                let p: PathParam = Self::p(params)?;
+            "drives.list" => {
+                let list = drives::list();
+                *self.listed.lock().unwrap() = list.iter().map(|d| d.id.clone()).collect();
+                Ok(json!({ "elevated": drives::is_elevated(), "drives": list }))
+            }
+            "scan.start" => {
+                let req: ScanRequest = Self::p(params)?;
                 {
-                    let mut running = self.running.lock().unwrap();
-                    running.retain(|_, r| !r.handle.is_finished());
-                    if !running.is_empty() {
-                        bail!("cannot switch cases while a job is running");
+                    let listed = self.listed.lock().unwrap();
+                    if let Some(d) = req.drives.iter().find(|d| !listed.contains(*d)) {
+                        bail!("unknown drive {d}");
                     }
                 }
-                let c = Case::open_or_create(&PathBuf::from(p.path))?;
-                let v = json!({ "root": c.root.display().to_string(), "info": c.info });
-                *self.case.lock().unwrap() = Some(c);
-                Ok(v)
-            }
-            "drives.list" => {
-                let root = self.case.lock().unwrap().as_ref().map(|c| c.root.clone());
-                let list: Vec<Value> = crate::drives::list()
-                    .into_iter()
-                    .map(|d| {
-                        let holds_case = root
-                            .as_ref()
-                            .is_some_and(|r| crate::drives::path_on_drive(r, &d.id));
-                        let mut v = serde_json::to_value(&d).unwrap_or_default();
-                        v["holds_case"] = json!(holds_case);
-                        v
-                    })
-                    .collect();
-                Ok(json!({ "elevated": crate::drives::is_elevated(), "drives": list }))
-            }
-            "adb.status" => {
-                let p: AdbParam = Self::p(params)?;
-                match jobs::device::client(p.adb_path.as_deref()) {
-                    Ok(c) => Ok(json!({ "found": true, "version": c.version().ok() })),
-                    Err(e) => Ok(json!({ "found": false, "message": e.to_string() })),
+                let mut running = self.running.lock().unwrap();
+                if running.as_ref().is_some_and(|r| !r.handle.is_finished()) {
+                    bail!("a scan is already running");
                 }
-            }
-            "adb.devices" => {
-                let p: AdbParam = Self::p(params)?;
-                Ok(serde_json::to_value(
-                    jobs::device::client(p.adb_path.as_deref())?.list_devices()?,
-                )?)
-            }
-            "adb.deviceInfo" => {
-                let p: SerialParam = Self::p(params)?;
-                let c = jobs::device::client(p.adb_path.as_deref())?;
-                let info = c.device_info(&p.serial)?;
-                let caps = c.capabilities(&p.serial)?;
-                Ok(json!({ "info": info, "capabilities": caps }))
-            }
-            "adb.listPartitions" => {
-                let p: RootParam = Self::p(params)?;
-                let c = jobs::device::client(p.adb_path.as_deref())?;
-                if !c.root_check(&p.serial, &p.confirmation)? {
-                    bail!("root (uid 0) is not available on this device");
-                }
-                let parts = c.list_partitions(&p.serial, &p.confirmation)?;
-                if let Ok(case) = self.case() {
-                    case.audit(
-                        "root_partitions_listed",
-                        json!({ "serial": p.serial, "partitions": parts }),
-                    );
-                }
-                Ok(json!(parts))
-            }
-            "job.start" => {
-                let p: JobStart = Self::p(params)?;
-                let case = self.case()?;
-                let rec = jobs::create_job(&case, p.params)?;
-                self.spawn(case, rec)
-            }
-            "job.resume" => {
-                let p: JobId = Self::p(params)?;
-                let case = self.case()?;
-                let rec = JobRecord::load(&case, &p.job_id)?;
-                if rec.status == JobStatus::Completed {
-                    bail!("job already completed");
-                }
-                self.spawn(case, rec)
-            }
-            "job.cancel" => {
-                let p: JobId = Self::p(params)?;
-                let running = self.running.lock().unwrap();
-                let r = running
-                    .get(&p.job_id)
-                    .ok_or_else(|| anyhow!("job is not running"))?;
-                r.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                *self.session.lock().unwrap() = Session::default();
+                let cancel = new_cancel_flag();
+                let (out, session, flag) = (self.out.clone(), self.session.clone(), cancel.clone());
+                let handle = std::thread::Builder::new().name("scan".into()).spawn(move || {
+                    let last = Mutex::new(Instant::now() - Duration::from_secs(1));
+                    let progress = |drive: &str, phase: &str, done: u64, total: u64, msg: &str| {
+                        let mut l = last.lock().unwrap();
+                        if l.elapsed() >= Duration::from_millis(200) || done >= total {
+                            *l = Instant::now();
+                            emit(&out, &json!({ "event": "scan.progress", "drive": drive, "phase": phase, "done": done, "total": total, "message": msg }));
+                        }
+                    };
+                    let result = recover::scan_drives(&req, &flag, &progress);
+                    let cancelled = pr_model::is_cancelled(&flag);
+                    match result {
+                        Ok((files, summary)) => {
+                            let ev = json!({ "event": "scan.finished", "cancelled": cancelled, "summary": summary });
+                            *session.lock().unwrap() = Session { files, summary: Some(summary) };
+                            emit(&out, &ev);
+                        }
+                        Err(e) => emit(&out, &json!({ "event": "scan.finished", "error": format!("{e:#}") })),
+                    }
+                })?;
+                *running = Some(Running { cancel, handle });
                 Ok(json!(true))
             }
-            "job.list" => {
-                let case = self.case()?;
-                let running = self.running.lock().unwrap();
-                let jobs: Vec<Value> = case
-                    .list_job_ids()
+            "scan.cancel" => {
+                if let Some(r) = self.running.lock().unwrap().as_ref() {
+                    r.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                Ok(json!(true))
+            }
+            "scan.results" => {
+                let q: ResultsQuery = Self::p(params)?;
+                let s = self.session.lock().unwrap();
+                let text = q
+                    .text
+                    .as_deref()
+                    .map(str::to_lowercase)
+                    .filter(|t| !t.is_empty());
+                let mut v: Vec<&FoundFile> = s
+                    .files
                     .iter()
-                    .filter_map(|id| JobRecord::load(&case, id).ok())
-                    .map(|j| {
-                        let n = j.results(&case).len();
-                        let mut v = serde_json::to_value(&j).unwrap_or_default();
-                        v["running"] = json!(running.contains_key(&j.id));
-                        v["result_count"] = json!(n);
-                        v
+                    .filter(|f| q.states.as_ref().is_none_or(|st| st.contains(&f.state)))
+                    .filter(|f| {
+                        text.as_ref()
+                            .is_none_or(|t| f.path.to_lowercase().contains(t))
                     })
                     .collect();
-                Ok(json!(jobs))
-            }
-            "results.finalize" => {
-                let case = self.case()?;
-                Ok(serde_json::to_value(finalize::finalize(&case)?.1)?)
-            }
-            "results.list" => {
-                let p: ResultsList = Self::p(params)?;
-                let case = self.case()?;
-                let all = finalize::load_results(&case);
-                let filtered: Vec<_> = all
+                match q.sort.as_deref().unwrap_or("state") {
+                    "name" => v.sort_by_key(|f| f.name.to_lowercase()),
+                    "path" => v.sort_by_key(|f| f.path.to_lowercase()),
+                    "size" => v.sort_by_key(|f| f.size),
+                    "modified" => v.sort_by(|a, b| a.modified.cmp(&b.modified)),
+                    _ => v.sort_by_key(|f| (f.state, f.path.to_lowercase())),
+                }
+                if q.descending {
+                    v.reverse();
+                }
+                let items: Vec<&FoundFile> = v
                     .iter()
-                    .filter(|r| p.classification.is_none_or(|c| r.classification == c))
+                    .skip(q.offset)
+                    .take(q.limit.min(5000))
+                    .copied()
                     .collect();
-                let items: Vec<_> = filtered
+                Ok(
+                    json!({ "total": v.len(), "all": s.files.len(), "items": items, "summary": s.summary }),
+                )
+            }
+            "scan.preview" => {
+                let p: IdParam = Self::p(params)?;
+                let f = self
+                    .session
+                    .lock()
+                    .unwrap()
+                    .files
                     .iter()
-                    .skip(p.offset)
-                    .take(p.limit.min(5000))
-                    .collect();
-                Ok(json!({ "total": filtered.len(), "offset": p.offset, "items": items }))
+                    .find(|f| f.id == p.id)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("unknown file"))?;
+                let src = Self::open_drive(&f.drive)?;
+                let jpeg = recover::preview(&f, src.as_ref())?;
+                Ok(json!({ "jpeg_base64": base64(&jpeg) }))
             }
-            "export.run" => {
-                let p: ExportParams = Self::p(params)?;
-                let case = self.case()?;
-                let classes: BTreeSet<_> = p.classifications.into_iter().collect();
-                Ok(serde_json::to_value(finalize::export(
-                    &case,
-                    &PathBuf::from(p.dest),
-                    &classes,
-                    p.include_duplicates,
-                )?)?)
-            }
-            "report.generate" => {
-                let case = self.case()?;
-                let (j, h) = report::write(&case)?;
-                Ok(json!({ "json": j, "html": h }))
+            "scan.recover" => {
+                let p: RecoverParams = Self::p(params)?;
+                let s = self.session.lock().unwrap();
+                let wanted: HashSet<u64> = p.ids.into_iter().collect();
+                let files: Vec<&FoundFile> =
+                    s.files.iter().filter(|f| wanted.contains(&f.id)).collect();
+                if files.is_empty() {
+                    bail!("select the files to recover");
+                }
+                let out = self.out.clone();
+                let open = |d: &str| Self::open_drive(d);
+                let summary = recover::recover(
+                    &files,
+                    &PathBuf::from(&p.dest),
+                    p.keep_folders,
+                    &open,
+                    &|dest, drive| drives::path_on_drive(dest, drive),
+                    &new_cancel_flag(),
+                    &|done, total| {
+                        emit(
+                            &out,
+                            &json!({ "event": "recover.progress", "done": done, "total": total }),
+                        )
+                    },
+                )?;
+                Ok(serde_json::to_value(summary)?)
             }
             other => bail!("unknown method '{other}'"),
         }
     }
+}
 
-    fn spawn(self: &Arc<Self>, case: Case, mut rec: JobRecord) -> Result<Value> {
-        let mut running = self.running.lock().unwrap();
-        running.retain(|_, r| !r.handle.is_finished());
-        if !running.is_empty() {
-            bail!("another job is running; cancel it or wait for it to finish");
-        }
-        let cancel = new_cancel_flag();
-        let id = rec.id.clone();
-        let out = self.out.clone();
-        let flag = cancel.clone();
-        let me = Arc::downgrade(self);
-        let handle = std::thread::Builder::new().name(format!("job-{id}")).spawn(move || {
-            let progress = EventProgress { out: out.clone(), last: Mutex::new(Instant::now() - Duration::from_secs(1)) };
-            let status = jobs::run_job(&case, &mut rec, &flag, &progress);
-            let (status, error) = match status {
-                Ok(s) => (s, rec.error.clone()),
-                Err(e) => (JobStatus::Failed, Some(format!("{e:#}"))),
-            };
-            emit(&out, &json!({ "event": "job.finished", "job_id": rec.id, "status": status, "error": error }));
-            if let Some(s) = me.upgrade() {
-                if let Ok(mut r) = s.running.try_lock() {
-                    r.remove(&rec.id);
-                }
-            }
-        })?;
-        running.insert(id.clone(), Running { cancel, handle });
-        Ok(json!({ "job_id": id }))
+fn base64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
+        s.push(T[(n >> 18) as usize & 63] as char);
+        s.push(T[(n >> 12) as usize & 63] as char);
+        s.push(if c.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        s.push(if c.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn base64_encoding() {
+        assert_eq!(super::base64(b"Man"), "TWFu");
+        assert_eq!(super::base64(b"Ma"), "TWE=");
+        assert_eq!(super::base64(b"M"), "TQ==");
     }
 }

@@ -9,6 +9,7 @@ pub mod classify;
 pub mod drives;
 pub mod finalize;
 pub mod jobs;
+pub mod recover;
 pub mod report;
 pub mod server;
 pub mod util;

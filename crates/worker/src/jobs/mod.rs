@@ -3,11 +3,7 @@
 //! own directory so it can be cancelled and resumed later — also after a
 //! crash or reboot.
 
-pub mod device;
-pub mod drive;
 pub mod image;
-pub mod local;
-pub mod partition;
 
 use crate::case::Case;
 use crate::util;
@@ -22,20 +18,12 @@ use std::path::PathBuf;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobParams {
     ImageScan(image::ImageScanParams),
-    DriveScan(drive::DriveScanParams),
-    DeviceAcquire(device::DeviceParams),
-    LocalScan(local::LocalScanParams),
-    PartitionAcquire(partition::PartitionParams),
 }
 
 impl JobParams {
     pub fn kind(&self) -> &'static str {
         match self {
             JobParams::ImageScan(_) => "image_scan",
-            JobParams::DriveScan(_) => "drive_scan",
-            JobParams::DeviceAcquire(_) => "device_acquire",
-            JobParams::LocalScan(_) => "local_scan",
-            JobParams::PartitionAcquire(_) => "partition_acquire",
         }
     }
 }
@@ -150,10 +138,6 @@ pub fn run_job(
     let params = rec.params.clone();
     let outcome = match &params {
         JobParams::ImageScan(p) => image::run(case, rec, p, cancel, progress),
-        JobParams::DriveScan(p) => drive::run(case, rec, p, cancel, progress),
-        JobParams::DeviceAcquire(p) => device::run(case, rec, p, cancel, progress),
-        JobParams::LocalScan(p) => local::run(case, rec, p, cancel, progress),
-        JobParams::PartitionAcquire(p) => partition::run(case, rec, p, cancel, progress),
     };
     match outcome {
         Ok(true) => rec.status = JobStatus::Completed,

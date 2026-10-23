@@ -7,9 +7,7 @@ use pr_testkit::images::{self, JpegOpts};
 use pr_testkit::{sha256_hex, Rng};
 use pr_worker::case::Case;
 use pr_worker::finalize;
-use pr_worker::jobs::{
-    self, image::ImageScanParams, local::LocalScanParams, JobParams, JobRecord, JobStatus,
-};
+use pr_worker::jobs::{self, image::ImageScanParams, JobParams, JobRecord, JobStatus};
 use pr_worker::{report, NoProgress, Progress};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -358,102 +356,4 @@ fn encrypted_and_unsupported_sources_are_reported_not_fabricated() {
         .limitations
         .iter()
         .any(|l| l.contains("file-based encryption")));
-}
-
-#[test]
-fn local_folder_scan_classifies_existing_files() {
-    let t = tempfile::tempdir().unwrap();
-    let src = t.path().join("backup");
-    let cam = src.join("DCIM").join("Camera");
-    std::fs::create_dir_all(&cam).unwrap();
-    std::fs::create_dir_all(src.join("DCIM/.thumbnails")).unwrap();
-    std::fs::create_dir_all(src.join("Download")).unwrap();
-    let a = images::jpeg(640, 480, 11, &JpegOpts::default());
-    let thumb = images::embedded_thumbnail(640, 480, 11);
-    std::fs::write(cam.join("IMG_1.jpg"), &a).unwrap();
-    std::fs::write(src.join("Download/IMG_1 (copy).jpg"), &a).unwrap();
-    std::fs::write(
-        cam.join(".trashed-1735000000-IMG_2.jpg"),
-        images::jpeg(300, 200, 12, &JpegOpts::default()),
-    )
-    .unwrap();
-    std::fs::write(src.join("DCIM/.thumbnails/99.jpg"), &thumb).unwrap();
-    // thumbdata container: two concatenated previews with headers between.
-    let mut td = vec![1u8; 64];
-    td.extend_from_slice(&images::embedded_thumbnail(400, 300, 13));
-    td.extend_from_slice(&[2u8; 100]);
-    td.extend_from_slice(&images::embedded_thumbnail(400, 300, 14));
-    std::fs::write(src.join("DCIM/.thumbnails/.thumbdata4--1967290299"), &td).unwrap();
-    std::fs::write(src.join("notes.txt"), b"not an image").unwrap();
-
-    // Case inside the scanned folder is refused.
-    let inner = Case::open_or_create(&src.join("case-inside")).unwrap();
-    let mut bad = jobs::create_job(
-        &inner,
-        JobParams::LocalScan(LocalScanParams {
-            dir: src.display().to_string(),
-            max_files: None,
-        }),
-    )
-    .unwrap();
-    assert_eq!(
-        jobs::run_job(&inner, &mut bad, &pr_model::new_cancel_flag(), &NoProgress).unwrap(),
-        JobStatus::Failed
-    );
-    std::fs::remove_dir_all(src.join("case-inside")).unwrap();
-
-    let case = Case::open_or_create(&t.path().join("case")).unwrap();
-    let mut rec = jobs::create_job(
-        &case,
-        JobParams::LocalScan(LocalScanParams {
-            dir: src.display().to_string(),
-            max_files: None,
-        }),
-    )
-    .unwrap();
-    assert_eq!(
-        jobs::run_job(&case, &mut rec, &pr_model::new_cancel_flag(), &NoProgress).unwrap(),
-        JobStatus::Completed,
-        "{:?}",
-        rec.error
-    );
-    let (rs, _) = finalize::finalize(&case).unwrap();
-    let copies = by_sha(&rs, &a);
-    assert_eq!(copies.len(), 2);
-    let orig = copies
-        .iter()
-        .find(|r| r.classification == Classification::ExistingOriginal)
-        .unwrap();
-    assert!(orig.source_path.as_deref().unwrap().contains("Camera"));
-    assert!(copies
-        .iter()
-        .any(|r| r.classification == Classification::ExistingDuplicate));
-    let trashed = rs
-        .iter()
-        .find(|r| {
-            r.source_path
-                .as_deref()
-                .is_some_and(|p| p.contains(".trashed-"))
-        })
-        .unwrap();
-    assert_eq!(trashed.classification, Classification::ExistingOriginal);
-    assert!(trashed.warnings.iter().any(|w| w.contains("system trash")));
-    let th = by_sha(&rs, &thumb);
-    assert_eq!(th[0].classification, Classification::Thumbnail);
-    assert!(
-        th[0]
-            .associations
-            .iter()
-            .any(|x| x.relation == Relation::ThumbnailOf && x.result_id == orig.id),
-        "{:?}",
-        th[0].associations
-    );
-    let carved_thumbs = rs
-        .iter()
-        .filter(|r| r.method == pr_model::model::RecoveryMethod::ThumbnailCacheCarve)
-        .count();
-    assert_eq!(carved_thumbs, 2);
-    assert_eq!(rs.len(), 6);
-    // Source folder untouched.
-    assert_eq!(std::fs::read(cam.join("IMG_1.jpg")).unwrap(), a);
 }

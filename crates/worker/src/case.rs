@@ -6,7 +6,7 @@
 //!   case.json            case metadata
 //!   audit.jsonl          append-only audit log
 //!   evidence/            verified working copies and acquired partition images
-//!   acquired/            files copied from devices / local folders
+//!   acquired/            reserved for copied source files
 //!   recovered/<class>/   carved and filesystem-recovered files
 //!   jobs/<job-id>/       job.json, checkpoint.json, results*.jsonl
 //!   results.json         merged, deduplicated results

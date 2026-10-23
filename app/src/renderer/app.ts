@@ -1,17 +1,8 @@
-// Renderer: plain DOM + TypeScript. All untrusted strings (file names,
-// EXIF values, paths) are inserted with textContent, never as HTML.
+// Renderer: Recuva-style wizard → scan → results. Plain DOM + TypeScript.
+// All file names and paths are inserted with textContent, never as HTML.
 
-import type {
-  Classification,
-  DriveInfo,
-  JobInfo,
-  ListedDevice,
-  PhotoRecoveryApi,
-  RecoveryResult,
-  StartJob,
-  WorkerEvent,
-} from "../shared/types.js";
-import { CLASSIFICATIONS, CLASSIFICATION_LABELS } from "../shared/types.js";
+import type { Category, DriveInfo, FoundFile, PhotoRecoveryApi, ResultsQuery, ScanRequest, State, WorkerEvent } from "../shared/types.js";
+import { CATEGORIES, STATE_LABELS } from "../shared/types.js";
 
 declare global {
   interface Window {
@@ -20,9 +11,7 @@ declare global {
 }
 
 const api = window.photoRecovery;
-const PAGE = 500;
-/** Formats Chromium can display (serialised `ImageFormat` names). */
-const PREVIEWABLE = ["jpeg", "png", "webp", "gif", "bmp", "avif"];
+const PAGE = 1000;
 
 function $(id: string): HTMLElement {
   const e = document.getElementById(id);
@@ -30,11 +19,11 @@ function $(id: string): HTMLElement {
   return e;
 }
 
-function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: { class?: string; text?: string; title?: string } = {},
-  children: (Node | string)[] = [],
-): HTMLElementTagNameMap[K] {
+function input(id: string): HTMLInputElement {
+  return $(id) as HTMLInputElement;
+}
+
+function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: { class?: string; text?: string; title?: string } = {}, children: (Node | string)[] = []): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   if (props.class) el.className = props.class;
   if (props.text !== undefined) el.textContent = props.text;
@@ -44,549 +33,338 @@ function h<K extends keyof HTMLElementTagNameMap>(
 }
 
 let toastTimer: number | undefined;
-function toast(msg: string, error = false): void {
+function toast(msg: string, error = false, action?: { label: string; run: () => void }): void {
   const t = $("toast");
-  t.textContent = msg;
+  t.replaceChildren(h("span", { text: msg }));
+  if (action) {
+    const b = h("button", { text: action.label });
+    b.addEventListener("click", action.run);
+    t.append(b);
+  }
   t.className = error ? "toast error" : "toast";
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => t.classList.add("hidden"), error ? 9000 : 4000);
+  toastTimer = window.setTimeout(() => t.classList.add("hidden"), error ? 12000 : 8000);
+}
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : String(e);
 }
 
 async function guard<T>(p: Promise<T>): Promise<T | undefined> {
   try {
     return await p;
   } catch (e) {
-    toast(e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : String(e), true);
+    toast(errText(e), true);
     return undefined;
   }
 }
 
 function fmtBytes(n: number | null): string {
-  if (n === null) return "—";
+  if (n === null) return "";
   if (n < 1024) return `${n} B`;
-  if (n < 1048576) return `${(n / 1024).toFixed(1)} KiB`;
-  if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MiB`;
-  return `${(n / 1073741824).toFixed(2)} GiB`;
+  if (n < 1048576) return `${(n / 1024).toFixed(0)} KB`;
+  if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
+  return `${(n / 1073741824).toFixed(2)} GB`;
 }
 
-// ---------- navigation ----------
-
-function show(view: string): void {
-  document.querySelectorAll<HTMLElement>(".view").forEach((v) => v.classList.toggle("hidden", v.id !== `view-${view}`));
-  document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
-  if (view === "jobs") void refreshJobs();
-  if (view === "pc") void refreshDrives();
-  if (view === "results" && results.length === 0) void loadResults(true);
+function fmtDate(s: string | null): string {
+  if (!s) return "";
+  return s.replace("T", " ").replace(/Z$/, "").slice(0, 16);
 }
 
-document.querySelectorAll<HTMLButtonElement>(".nav").forEach((b) => b.addEventListener("click", () => show(b.dataset.view ?? "device")));
-
-// ---------- case ----------
-
-let caseOpen = false;
-$("btn-case").addEventListener("click", async () => {
-  const r = await guard(api.chooseCase());
-  if (!r) return;
-  caseOpen = true;
-  $("case-label").textContent = `Case: ${r.root}`;
-  results = [];
-  void refreshJobs();
-  void refreshDrives();
-  toast("Case opened");
-});
-
-function needCase(): boolean {
-  if (!caseOpen) toast("Open or create a case folder first (it must not be inside the evidence).", true);
-  return caseOpen;
+function show(screen: "wizard" | "scanning" | "results"): void {
+  for (const s of ["wizard", "scanning", "results"]) $(s).classList.toggle("hidden", s !== screen);
+  $("btn-new").classList.toggle("hidden", screen !== "results");
 }
 
-// ---------- this PC ----------
+// ---------- wizard ----------
 
-async function refreshDrives(): Promise<void> {
+let drives: DriveInfo[] = [];
+let elevated = true;
+
+const types = $("types");
+for (const c of CATEGORIES) {
+  const r = h("input");
+  r.type = "radio";
+  r.name = "type";
+  r.value = c.id;
+  r.checked = c.id === "pictures";
+  types.append(h("label", { class: "choice" }, [r, h("div", {}, [h("b", { text: c.label }), h("span", { text: c.hint })])]));
+}
+
+function selectedType(): Category {
+  return (document.querySelector<HTMLInputElement>('input[name="type"]:checked')?.value ?? "pictures") as Category;
+}
+
+function selectedLocation(): string {
+  return document.querySelector<HTMLInputElement>('input[name="loc"]:checked')?.value ?? "all";
+}
+
+function scannable(d: DriveInfo): boolean {
+  return d.kind === "volume" && d.drive_type !== "network" && d.drive_type !== "optical";
+}
+
+async function loadDrives(): Promise<void> {
   const r = await guard(api.drives());
-  const tbody = $("drive-table").querySelector("tbody")!;
-  tbody.replaceChildren();
+  if (!r) return;
+  drives = r.drives.filter(scannable);
+  elevated = r.elevated;
+  const sel = $("drive-select") as HTMLSelectElement;
+  sel.replaceChildren(
+    ...drives.map((d) => {
+      const kind = [d.drive_type === "removable" ? "USB / memory card" : d.ssd ? "SSD" : d.ssd === false ? "Hard disk" : "", d.filesystem ?? "RAW"].filter(Boolean).join(", ");
+      const o = h("option", { text: `${d.id} ${d.label ?? ""} — ${fmtBytes(d.size)} (${kind})` });
+      o.value = d.id;
+      return o;
+    }),
+  );
   const banner = $("admin-banner");
-  if (!r) return;
-  banner.replaceChildren();
-  banner.classList.toggle("hidden", r.elevated);
-  if (!r.elevated) {
-    const btn = h("button", { class: "primary", text: "Restart as administrator" });
-    btn.addEventListener("click", () => void guard(api.relaunchAsAdmin()));
-    banner.append(
-      h("p", { text: "Scanning a drive needs administrator rights (Windows only lets administrators read a disk directly). PhotoRecovery only reads the drive; it never writes to it." }),
-      ...(api.platform() === "win32" ? [btn] : []),
-    );
+  banner.classList.toggle("hidden", elevated);
+  banner.replaceChildren(h("span", { text: "PhotoRecovery needs administrator rights to read drives. It only reads them — nothing is changed." }));
+  if (!elevated && api.platform() === "win32") {
+    const b = h("button", { class: "primary", text: "Restart as administrator" });
+    b.addEventListener("click", () => void guard(api.relaunchAsAdmin()));
+    banner.append(b);
   }
-  if (r.drives.length === 0) {
-    tbody.append(h("tr", {}, [h("td", { text: "No drives found." })]));
-  }
-  for (const d of r.drives) tbody.append(driveRow(d, r.elevated));
+  updateNotes();
 }
 
-function driveRow(d: DriveInfo, elevated: boolean): HTMLTableRowElement {
-  const kind: string[] = [];
-  if (d.kind === "disk") kind.push("whole disk");
-  if (d.drive_type && d.drive_type !== "disk") kind.push(d.drive_type);
-  if (d.ssd === true) kind.push("SSD");
-  if (d.ssd === false) kind.push("HDD");
-  if (d.filesystem) kind.push(d.filesystem);
-  const notes = h("td");
-  for (const n of d.notes) notes.append(h("div", { class: "muted small", text: n }));
-  if (d.holds_case) notes.append(h("div", { class: "chip bad", text: "Your case folder is on this drive — choose a case folder on another drive to scan it." }));
-  const act = h("td");
-  const scannable = d.drive_type !== "network" && d.drive_type !== "optical";
-  if (scannable) {
-    const b = h("button", { class: "primary", text: "Scan for deleted photos" });
-    b.disabled = d.holds_case || !elevated;
-    b.addEventListener("click", () => {
-      if (!needCase()) return;
-      void startJob({
-        kind: "drive_scan",
-        drive: d.id,
-        all_space: (document.getElementById("opt-all-space") as HTMLInputElement).checked,
-        include_existing: (document.getElementById("opt-existing") as HTMLInputElement).checked,
-      });
-    });
-    act.append(b);
+function targetDrives(): string[] {
+  const loc = selectedLocation();
+  if (loc === "drive") return [($("drive-select") as HTMLSelectElement).value].filter(Boolean);
+  if (loc === "folder") {
+    const m = /^([A-Za-z]:)/.exec(input("folder-input").value.trim());
+    return m ? drives.filter((d) => d.id.toUpperCase() === m[1].toUpperCase()).map((d) => d.id) : [];
   }
-  const name = [d.label, d.is_system ? "(Windows)" : ""].filter(Boolean).join(" ");
-  return h("tr", {}, [
-    h("td", { class: "mono", text: d.id }),
-    h("td", { text: name }),
-    h("td", { text: kind.join(" · ") }),
-    h("td", { text: d.size !== null ? `${fmtBytes(d.size)}${d.free !== null ? ` (${fmtBytes(d.free)} free)` : ""}` : "?" }),
-    notes,
-    act,
-  ]);
+  return drives.map((d) => d.id);
 }
 
-$("btn-refresh-drives").addEventListener("click", () => void refreshDrives());
-
-// ---------- device ----------
-
-async function refreshAdb(): Promise<void> {
-  const s = await guard(api.adbStatus());
-  const el = $("adb-status");
-  el.replaceChildren();
-  if (!s) return;
-  if (s.found) {
-    el.append(h("span", { class: "chip ok", text: "adb found" }), h("span", { class: "muted", text: ` ${s.version ?? ""}` }));
-  } else {
-    el.append(
-      h("span", { class: "chip bad", text: "adb not found" }),
-      h("p", { text: "Install Android SDK Platform-Tools and make sure adb is on PATH (see docs/USB_ADB_SETUP.md)." }),
-    );
+function updateNotes(): void {
+  const notes = $("drive-notes");
+  notes.replaceChildren();
+  for (const d of drives.filter((d) => targetDrives().includes(d.id))) {
+    for (const n of d.notes) notes.append(h("div", { text: `${d.id} ${n}` }));
   }
 }
 
-async function refreshDevices(): Promise<void> {
-  const devs = await guard(api.devices());
-  const tbody = $("device-table").querySelector("tbody")!;
-  tbody.replaceChildren();
-  if (!devs) return;
-  if (devs.length === 0) {
-    tbody.append(h("tr", {}, [h("td", { text: "No devices. Connect via USB, enable USB debugging, and accept the prompt on the phone." })]));
-  }
-  for (const d of devs) tbody.append(deviceRow(d));
-}
+document.querySelectorAll('input[name="loc"]').forEach((r) => r.addEventListener("change", updateNotes));
+$("drive-select").addEventListener("change", () => {
+  (document.querySelector('input[name="loc"][value="drive"]') as HTMLInputElement).checked = true;
+  updateNotes();
+});
+input("folder-input").addEventListener("input", () => {
+  (document.querySelector('input[name="loc"][value="folder"]') as HTMLInputElement).checked = true;
+  updateNotes();
+});
+$("btn-browse").addEventListener("click", async () => {
+  const f = await guard(api.chooseFolderToSearch());
+  if (!f) return;
+  input("folder-input").value = f;
+  (document.querySelector('input[name="loc"][value="folder"]') as HTMLInputElement).checked = true;
+  updateNotes();
+});
 
-function deviceRow(d: ListedDevice): HTMLTableRowElement {
-  const stateChip = h("span", {
-    class: `chip ${d.state === "device" ? "ok" : "warn"}`,
-    text: d.state === "unauthorized" ? "unauthorized — accept the USB debugging prompt" : d.state,
-  });
-  const actions = h("td");
-  if (d.state === "device") {
-    const info = h("button", { text: "Details" });
-    info.addEventListener("click", () => void showDevice(d.serial));
-    const acq = h("button", { class: "primary", text: "Copy accessible photos" });
-    acq.addEventListener("click", () => {
-      if (!needCase()) return;
-      void startJob({ kind: "device_acquire", serial: d.serial });
-    });
-    actions.append(info, " ", acq);
-  }
-  return h("tr", {}, [h("td", { class: "mono", text: d.serial }), h("td", {}, [stateChip]), h("td", { text: d.model ?? "" }), actions]);
-}
-
-async function showDevice(serial: string): Promise<void> {
-  const r = await guard(api.deviceInfo(serial));
-  if (!r) return;
-  const el = $("device-detail");
-  el.classList.remove("hidden");
-  el.replaceChildren();
-  const info = r.info as Record<string, unknown>;
-  const caps = r.capabilities as Record<string, unknown>;
-  const dl = h("dl");
-  const add = (k: string, v: unknown) => {
-    if (v === null || v === undefined || v === "") return;
-    dl.append(h("dt", { text: k }), h("dd", { text: String(v) }));
+$("btn-start").addEventListener("click", async () => {
+  const loc = selectedLocation();
+  const req: ScanRequest = {
+    drives: targetDrives(),
+    category: selectedType(),
+    deep_scan: input("opt-deep").checked,
+    folder: loc === "folder" ? input("folder-input").value.trim() || null : null,
+    recycle_bin_only: loc === "recycle",
   };
-  add("Brand / model", `${info.brand ?? ""} ${info.model ?? ""}`);
-  add("Android", `${info.android_version ?? "?"} (SDK ${info.sdk ?? "?"})`);
-  add("Security patch", info.security_patch);
-  add("realme device", info.is_realme ? "yes" : "no");
-  add("Vendor UI", info.vendor_ui);
-  add("Encryption", `${caps.crypto_state ?? "?"} / ${caps.crypto_type ?? "?"}`);
-  add("Bootloader locked", caps.bootloader_locked);
-  add("Verified boot", caps.verified_boot_state);
-  add("su present", caps.su_present ? "yes (not used unless you enable root mode)" : "no");
-  add("Shared storage free", caps.shared_storage_free_kib ? fmtBytes(Number(caps.shared_storage_free_kib) * 1024) : null);
-  add("SD cards", (caps.external_volumes as string[] | undefined)?.join(", "));
-  const lim = h("ul", { class: "limits" });
-  for (const l of (caps.limitations as string[]) ?? []) lim.append(h("li", { text: l }));
-  el.append(h("h2", { text: `Device ${serial}` }), dl, h("h2", { text: "What this connection can and cannot do" }), lim);
-  (document.getElementById("root-serial") as HTMLInputElement).value = serial;
+  if (req.drives.length === 0) return toast(loc === "folder" ? "Type or browse to a folder like C:\\Users\\You\\Pictures" : "No drives available to scan.", true);
+  if (!elevated) return toast("Restart PhotoRecovery as administrator to scan drives.", true);
+  $("bar").style.width = "0%";
+  $("scan-msg").textContent = "Starting…";
+  show("scanning");
+  if (!(await guard(api.startScan(req)))) show("wizard");
+});
+
+$("btn-cancel").addEventListener("click", () => void guard(api.cancelScan()));
+$("btn-new").addEventListener("click", () => {
+  show("wizard");
+  void loadDrives();
+});
+
+// ---------- results ----------
+
+let rows: FoundFile[] = [];
+let total = 0;
+let sort: ResultsQuery["sort"] = "state";
+let descending = false;
+const checked = new Set<number>();
+let current: number | null = null;
+
+function states(): State[] {
+  return [...document.querySelectorAll<HTMLInputElement>(".st:checked")].map((c) => c.value as State);
 }
 
-$("btn-refresh-devices").addEventListener("click", () => void refreshDevices());
-
-$("btn-root-list").addEventListener("click", async () => {
-  const serial = (document.getElementById("root-serial") as HTMLInputElement).value.trim();
-  const confirmation = (document.getElementById("root-confirm") as HTMLInputElement).value;
-  const parts = await guard(api.listPartitions(serial, confirmation));
-  if (!parts) return;
-  const sel = document.getElementById("root-partition") as HTMLSelectElement;
-  sel.replaceChildren(...parts.map((p) => h("option", { text: p })));
-  toast(`${parts.length} partitions listed`);
-});
-
-$("btn-root-acquire").addEventListener("click", () => {
-  if (!needCase()) return;
-  const serial = (document.getElementById("root-serial") as HTMLInputElement).value.trim();
-  const confirmation = (document.getElementById("root-confirm") as HTMLInputElement).value;
-  const partition = (document.getElementById("root-partition") as HTMLSelectElement).value;
-  if (!partition) return toast("List partitions first", true);
-  void startJob({ kind: "partition_acquire", serial, partition, confirmation });
-});
-
-// ---------- image & folder ----------
-
-let imagePath: string | null = null;
-let folderPath: string | null = null;
-let exportPath: string | null = null;
-
-$("btn-pick-image").addEventListener("click", async () => {
-  imagePath = (await guard(api.chooseImage())) ?? imagePath;
-  $("image-path").textContent = imagePath ?? "";
-});
-$("btn-start-image").addEventListener("click", () => {
-  if (!needCase()) return;
-  if (!imagePath) return toast("Choose an image first", true);
-  const formats = [...document.querySelectorAll<HTMLInputElement>(".opt-format")].filter((c) => c.checked).map((c) => c.value);
-  void startJob({
-    kind: "image_scan",
-    image: imagePath,
-    working_copy: (document.getElementById("opt-working-copy") as HTMLInputElement).checked,
-    filesystem_analysis: (document.getElementById("opt-fs") as HTMLInputElement).checked,
-    carve: (document.getElementById("opt-carve") as HTMLInputElement).checked,
-    formats,
-  });
-});
-$("btn-pick-folder").addEventListener("click", async () => {
-  folderPath = (await guard(api.chooseFolder())) ?? folderPath;
-  $("folder-path").textContent = folderPath ?? "";
-});
-$("btn-start-folder").addEventListener("click", () => {
-  if (!needCase()) return;
-  if (!folderPath) return toast("Choose a folder first", true);
-  void startJob({ kind: "local_scan", dir: folderPath });
-});
-
-async function startJob(job: StartJob): Promise<void> {
-  const r = await guard(api.startJob(job));
+async function loadResults(reset: boolean): Promise<void> {
+  if (reset) rows = [];
+  const text = input("filter").value.trim();
+  const r = await guard(api.results({ offset: rows.length, limit: PAGE, sort, descending, text: text || null, states: states() }));
   if (!r) return;
-  toast(`Job started: ${r.job_id}`);
-  show("jobs");
+  total = r.total;
+  rows = rows.concat(r.items);
+  $("found-label").textContent = `${r.all} file${r.all === 1 ? "" : "s"} found${r.total !== r.all ? ` · ${r.total} shown` : ""}`;
+  if (r.summary) {
+    $("notes").replaceChildren(...r.summary.notes.map((n) => h("div", { text: n })));
+  }
+  renderTable();
 }
 
-// ---------- jobs ----------
-
-const progress = new Map<string, { phase: string; done: number; total: number; message: string }>();
-
-async function refreshJobs(): Promise<void> {
-  if (!caseOpen) return;
-  const jobs = await guard(api.listJobs());
-  if (!jobs) return;
-  const list = $("jobs-list");
-  list.replaceChildren(...jobs.slice().reverse().map(jobCard));
-  const running = jobs.filter((j) => j.running).length;
-  const badge = $("jobs-badge");
-  badge.textContent = String(running);
-  badge.classList.toggle("hidden", running === 0);
+function renderTable(): void {
+  const tbody = $("table").querySelector("tbody")!;
+  tbody.replaceChildren(...rows.map(row));
+  if (rows.length === 0) {
+    const td = h("td", { text: "No files match. Try “All files”, another location, Deep Scan, or tick Unrecoverable." });
+    td.colSpan = 7;
+    tbody.append(h("tr", {}, [td]));
+  }
+  $("more").classList.toggle("hidden", rows.length >= total);
+  document.querySelectorAll<HTMLElement>("th[data-sort]").forEach((th) => {
+    th.classList.toggle("sorted", th.dataset.sort === sort);
+    th.classList.toggle("desc", th.dataset.sort === sort && descending);
+  });
+  updateSelected();
 }
 
-function jobCard(j: JobInfo): HTMLElement {
-  const statusClass = j.status === "completed" ? "ok" : j.status === "failed" ? "bad" : "warn";
-  const head = h("div", { class: "head" }, [
-    h("span", { class: "id mono", text: j.id }),
-    h("span", { class: "chip", text: j.params.kind.replace("_", " ") }),
-    h("span", { class: `chip ${statusClass}`, text: j.running ? "running" : j.status }),
-    h("span", { class: "muted", text: `${j.result_count ?? 0} results` }),
+function row(f: FoundFile): HTMLTableRowElement {
+  const cb = h("input");
+  cb.type = "checkbox";
+  cb.checked = checked.has(f.id);
+  cb.disabled = f.state === "unrecoverable";
+  cb.addEventListener("click", (e) => e.stopPropagation());
+  cb.addEventListener("change", () => {
+    if (cb.checked) checked.add(f.id);
+    else checked.delete(f.id);
+    updateSelected();
+  });
+  const tr = h("tr", {}, [
+    h("td", { class: "c" }, [cb]),
+    h("td", { text: f.name, title: f.name }),
+    h("td", { text: f.path, title: f.path }),
+    h("td", { text: fmtDate(f.modified) }),
+    h("td", { class: "r", text: fmtBytes(f.size) }),
+    h("td", {}, [h("i", { class: `dot ${f.state}` }), STATE_LABELS[f.state]]),
+    h("td", { text: f.comment, title: f.comment }),
   ]);
-  const card = h("div", { class: "job" }, [head]);
-  card.dataset.job = j.id;
-  const bar = h("div", { class: "progress" }, [h("div")]);
-  const msg = h("div", { class: "muted mono" });
-  card.append(bar, msg);
-  updateProgress(card, progress.get(j.id));
-  const actions = h("div", { class: "row" });
-  if (j.running) {
-    const c = h("button", { text: "Cancel" });
-    c.addEventListener("click", () => void guard(api.cancelJob(j.id)));
-    actions.append(c);
-  } else if (j.status !== "completed") {
-    const r = h("button", { class: "primary", text: "Resume" });
-    r.addEventListener("click", async () => {
-      if (await guard(api.resumeJob(j.id))) void refreshJobs();
-    });
-    actions.append(r);
-  }
-  card.append(actions);
-  if (j.error) card.append(h("div", { class: "chip bad", text: j.error }));
-  if (j.limitations.length) {
-    const ul = h("ul", { class: "limits" });
-    for (const l of j.limitations.slice(0, 30)) ul.append(h("li", { text: l }));
-    card.append(h("div", { class: "muted", text: "Limitations:" }), ul);
-  }
-  return card;
+  if (current === f.id) tr.classList.add("selected");
+  tr.addEventListener("click", () => {
+    current = f.id;
+    document.querySelectorAll("tr.selected").forEach((r) => r.classList.remove("selected"));
+    tr.classList.add("selected");
+    void showInfo(f);
+  });
+  tr.addEventListener("dblclick", () => {
+    if (f.state !== "unrecoverable") {
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event("change"));
+    }
+  });
+  return tr;
 }
 
-function updateProgress(card: HTMLElement, p?: { phase: string; done: number; total: number; message: string }): void {
-  const bar = card.querySelector<HTMLElement>(".progress > div");
-  const msg = card.querySelector<HTMLElement>(".muted.mono");
-  if (!bar || !msg) return;
-  if (!p) {
-    bar.parentElement!.classList.add("hidden");
+async function showInfo(f: FoundFile): Promise<void> {
+  const info = $("info");
+  info.replaceChildren();
+  const add = (k: string, v: string | null) => {
+    if (v) info.append(h("dt", { text: k }), h("dd", { text: v }));
+  };
+  add("Filename", f.name);
+  add("Path", f.path);
+  add("Size", `${fmtBytes(f.size)} (${f.size.toLocaleString()} bytes)`);
+  add("State", STATE_LABELS[f.state]);
+  add("Comment", f.comment);
+  add("Modified", fmtDate(f.modified));
+  add("Created", fmtDate(f.created));
+  add("Found by", f.origin === "deep_scan" ? "Deep scan" : f.origin === "recycle_bin" ? "Recycle Bin" : `${f.filesystem} file record`);
+  if (f.width && f.height) add("Dimensions", `${f.width} × ${f.height}`);
+  const pv = $("preview");
+  if (f.category !== "pictures" || f.state === "unrecoverable") {
+    pv.replaceChildren(h("span", { class: "muted", text: f.state === "unrecoverable" ? "No preview: the data is gone" : "No preview for this file type" }));
     return;
   }
-  bar.parentElement!.classList.remove("hidden");
-  bar.style.width = p.total > 0 ? `${Math.min(100, (p.done / p.total) * 100).toFixed(1)}%` : "100%";
-  msg.textContent = `${p.phase}: ${p.total > 0 ? `${((p.done / p.total) * 100).toFixed(1)}% · ` : ""}${p.message}`;
+  pv.replaceChildren(h("span", { class: "muted", text: "Loading preview…" }));
+  try {
+    const url = await api.preview(f.id);
+    if (current !== f.id) return;
+    const img = h("img");
+    img.alt = f.name;
+    img.src = url;
+    pv.replaceChildren(img);
+  } catch (e) {
+    if (current === f.id) pv.replaceChildren(h("span", { class: "muted", text: `No preview: ${errText(e)}` }));
+  }
 }
 
-$("btn-refresh-jobs").addEventListener("click", () => void refreshJobs());
+function updateSelected(): void {
+  $("selected-label").textContent = checked.size ? `${checked.size} selected` : "Tick files to recover";
+  ($("btn-recover") as HTMLButtonElement).disabled = checked.size === 0;
+}
+
+document.querySelectorAll<HTMLElement>("th[data-sort]").forEach((th) =>
+  th.addEventListener("click", () => {
+    const s = th.dataset.sort as ResultsQuery["sort"];
+    descending = s === sort ? !descending : false;
+    sort = s;
+    void loadResults(true);
+  }),
+);
+document.querySelectorAll(".st").forEach((c) => c.addEventListener("change", () => void loadResults(true)));
+let filterTimer: number | undefined;
+input("filter").addEventListener("input", () => {
+  window.clearTimeout(filterTimer);
+  filterTimer = window.setTimeout(() => void loadResults(true), 250);
+});
+$("btn-more").addEventListener("click", () => void loadResults(false));
+input("check-all").addEventListener("change", () => {
+  for (const f of rows) {
+    if (f.state === "unrecoverable") continue;
+    if (input("check-all").checked) checked.add(f.id);
+    else checked.delete(f.id);
+  }
+  renderTable();
+});
+
+$("btn-recover").addEventListener("click", async () => {
+  const dest = await guard(api.chooseRecoverFolder());
+  if (!dest) return;
+  const r = await guard(api.recover([...checked], dest, input("opt-keep").checked));
+  if (!r) return;
+  const failed = r.failed.length ? ` ${r.failed.length} failed.` : "";
+  toast(`Recovered ${r.recovered} file${r.recovered === 1 ? "" : "s"} (${fmtBytes(r.bytes)}) to ${r.destination}.${failed}`, r.failed.length > 0, {
+    label: "Open folder",
+    run: () => void guard(api.openFolder(dest)),
+  });
+});
+
+// ---------- events ----------
 
 api.onEvent((ev: WorkerEvent) => {
-  if (ev.event === "job.progress") {
-    progress.set(ev.job_id, ev);
-    const card = document.querySelector<HTMLElement>(`.job[data-job="${CSS.escape(ev.job_id)}"]`);
-    if (card) updateProgress(card, ev);
-    else void refreshJobs();
-  } else if (ev.event === "job.finished") {
-    progress.delete(ev.job_id);
-    toast(`Job ${ev.status}${ev.error ? `: ${ev.error}` : ""}`, ev.status === "failed");
-    void refreshJobs();
-    results = [];
+  if (ev.event === "scan.progress") {
+    const pct = ev.total > 0 ? Math.min(100, (ev.done / ev.total) * 100) : 0;
+    $("bar").style.width = `${pct.toFixed(1)}%`;
+    const phase = ev.phase === "deep" ? "Deep scan (searching free space)" : "Reading file records";
+    $("scan-msg").textContent = `${ev.drive} — ${phase} ${pct ? `${pct.toFixed(0)}%` : ""}${ev.message ? ` · ${ev.message}` : ""}`;
+  } else if (ev.event === "scan.finished") {
+    if (ev.error) {
+      toast(ev.error, true);
+      show("wizard");
+      return;
+    }
+    checked.clear();
+    current = null;
+    $("preview").replaceChildren(h("span", { class: "muted", text: "Select a file to see a preview" }));
+    $("info").replaceChildren();
+    show("results");
+    void loadResults(true);
+    if (ev.cancelled) toast("Scan cancelled — showing what was found so far.");
   } else if (ev.event === "worker.exit") {
     toast(ev.message, true);
   }
 });
 
-// ---------- results ----------
-
-let results: RecoveryResult[] = [];
-let total = 0;
-
-function fillSelect(id: string, values: [string, string][]): void {
-  const sel = document.getElementById(id) as HTMLSelectElement;
-  for (const [value, label] of values) {
-    const o = h("option", { text: label });
-    o.value = value;
-    sel.append(o);
-  }
-}
-fillSelect("f-class", CLASSIFICATIONS.map((c) => [c, CLASSIFICATION_LABELS[c]]));
-fillSelect("f-format", ["jpeg", "png", "webp", "heic", "avif", "gif", "bmp", "dng"].map((f) => [f, f.toUpperCase()]));
-fillSelect(
-  "f-valid",
-  ["valid", "valid_with_warnings", "truncated", "corrupt", "structure_only", "decode_failed", "not_validated"].map((v) => [v, v.replace(/_/g, " ")]),
-);
-
-async function loadResults(reset: boolean): Promise<void> {
-  if (!caseOpen) return;
-  if (reset) {
-    results = [];
-    await guard(api.finalize());
-  }
-  const cls = ((document.getElementById("f-class") as HTMLSelectElement).value || null) as Classification | null;
-  const page = await guard(api.listResults(results.length, PAGE, cls));
-  if (!page) return;
-  total = page.total;
-  results = results.concat(page.items);
-  renderResults();
-}
-
-function filtered(): RecoveryResult[] {
-  const fmt = (document.getElementById("f-format") as HTMLSelectElement).value;
-  const val = (document.getElementById("f-valid") as HTMLSelectElement).value;
-  const hideDup = (document.getElementById("f-hide-dup") as HTMLInputElement).checked;
-  const q = (document.getElementById("f-search") as HTMLInputElement).value.trim().toLowerCase();
-  const sort = (document.getElementById("f-sort") as HTMLSelectElement).value;
-  const out = results.filter(
-    (r) =>
-      (!fmt || r.format === fmt) &&
-      (!val || r.validation === val) &&
-      (!hideDup || !r.associations.some((a) => a.relation === "duplicate_of")) &&
-      (!q || [r.id, r.source_path ?? "", r.sha256 ?? "", r.output_path ?? ""].some((s) => s.toLowerCase().includes(q))),
-  );
-  const key: Record<string, (r: RecoveryResult) => number | string> = {
-    class: (r) => CLASSIFICATIONS.indexOf(r.classification),
-    size: (r) => -(r.candidate_length ?? 0),
-    pixels: (r) => -((r.width ?? 0) * (r.height ?? 0)),
-    offset: (r) => r.source_offset ?? Number.MAX_SAFE_INTEGER,
-    path: (r) => r.source_path ?? "",
-  };
-  const k = key[sort] ?? key.class;
-  return out.sort((a, b) => {
-    const x = k(a);
-    const y = k(b);
-    return x < y ? -1 : x > y ? 1 : 0;
-  });
-}
-
-function validationChip(r: RecoveryResult): HTMLElement {
-  const cls = r.validation === "valid" ? "ok" : r.validation === "valid_with_warnings" || r.validation === "structure_only" ? "warn" : "bad";
-  return h("span", { class: `chip ${cls}`, text: r.validation.replace(/_/g, " ") });
-}
-
-function renderResults(): void {
-  const list = filtered();
-  $("results-summary").textContent = `${results.length} of ${total} loaded · ${list.length} shown`;
-  const grid = $("results-grid");
-  grid.replaceChildren(...list.slice(0, 3000).map(tile));
-  $("btn-more").classList.toggle("hidden", results.length >= total);
-}
-
-function tile(r: RecoveryResult): HTMLElement {
-  const thumb = h("div", { class: "thumb" });
-  if (r.output_path && PREVIEWABLE.includes(r.format)) {
-    const img = h("img");
-    img.loading = "lazy";
-    img.alt = "";
-    img.src = api.previewUrl(r.output_path);
-    img.addEventListener("error", () => thumb.replaceChildren(h("span", { text: "no preview" })));
-    thumb.append(img);
-  } else {
-    thumb.append(h("span", { text: r.output_path ? `${r.format.toUpperCase()} (no preview)` : "no data" }));
-  }
-  const name = r.source_path?.split("/").pop() ?? (r.source_offset !== null ? `@${r.source_offset}` : r.id.slice(0, 8));
-  const meta = h("div", { class: "meta" }, [
-    h("div", { class: "mono", text: name }),
-    h("span", { class: "chip", text: CLASSIFICATION_LABELS[r.classification] }),
-    validationChip(r),
-    ...(r.metadata.recycle_bin_path ? [h("span", { class: "chip warn", text: "Recycle Bin" })] : []),
-    h("div", { class: "muted", text: `${r.format.toUpperCase()} · ${r.width && r.height ? `${r.width}×${r.height}` : "?"} · ${fmtBytes(r.candidate_length)}` }),
-  ]);
-  const t = h("div", { class: "tile" }, [thumb, meta]);
-  t.tabIndex = 0;
-  t.addEventListener("click", () => showDetail(r));
-  t.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") showDetail(r);
-  });
-  return t;
-}
-
-function showDetail(r: RecoveryResult): void {
-  const d = $("detail");
-  d.classList.remove("hidden");
-  d.replaceChildren();
-  const close = h("button", { text: "Close" });
-  close.addEventListener("click", () => d.classList.add("hidden"));
-  d.append(close);
-  if (r.output_path && PREVIEWABLE.includes(r.format)) {
-    const img = h("img");
-    img.alt = "";
-    img.src = api.previewUrl(r.output_path);
-    d.append(img);
-  }
-  d.append(h("h2", { text: CLASSIFICATION_LABELS[r.classification] }));
-  const dl = h("dl");
-  const add = (k: string, v: unknown) => {
-    if (v === null || v === undefined || v === "") return;
-    dl.append(h("dt", { text: k }), h("dd", { text: String(v) }));
-  };
-  add("ID", r.id);
-  add("Source", r.source_id);
-  add("Method", r.method.replace(/_/g, " "));
-  add("Format", r.format);
-  add("Source path", r.source_path);
-  add("Source offset", r.source_offset);
-  add("Length", r.candidate_length !== null ? `${r.candidate_length} (${fmtBytes(r.candidate_length)})` : null);
-  add("Dimensions", r.width && r.height ? `${r.width} × ${r.height}` : null);
-  add("Validation", r.validation);
-  add("SHA-256", r.sha256);
-  add("dHash", r.perceptual_hash);
-  add("Output", r.output_path);
-  for (const [k, v] of Object.entries(r.metadata)) add(k, v);
-  d.append(dl);
-  const section = (title: string, items: string[]) => {
-    if (!items.length) return;
-    const ul = h("ul", { class: "limits" });
-    for (const i of items) ul.append(h("li", { text: i }));
-    d.append(h("h2", { text: title }), ul);
-  };
-  section("Warnings", r.warnings);
-  section("Limitations", r.limitations);
-  section("Diagnostics", r.diagnostics);
-  if (r.associations.length) {
-    const ul = h("ul", { class: "limits" });
-    for (const a of r.associations) {
-      const target = results.find((x) => x.id === a.result_id);
-      const li = h("li", { text: `${a.relation.replace(/_/g, " ")} ${a.result_id.slice(0, 8)} — ${a.basis}` });
-      if (target) {
-        li.style.cursor = "pointer";
-        li.addEventListener("click", () => showDetail(target));
-      }
-      ul.append(li);
-    }
-    d.append(h("h2", { text: "Associations" }), ul);
-  }
-}
-
-$("btn-finalize").addEventListener("click", () => void loadResults(true));
-$("btn-more").addEventListener("click", () => void loadResults(false));
-$("f-class").addEventListener("change", () => void loadResults(true));
-for (const id of ["f-format", "f-valid", "f-sort", "f-hide-dup"]) $(id).addEventListener("change", renderResults);
-$("f-search").addEventListener("input", renderResults);
-
-// ---------- export & report ----------
-
-const exportClasses = $("export-classes");
-for (const c of CLASSIFICATIONS) {
-  if (c === "unavailable_source_data") continue;
-  const cb = h("input");
-  cb.type = "checkbox";
-  cb.value = c;
-  cb.checked = c !== "existing_duplicate";
-  exportClasses.append(h("label", {}, [cb, ` ${CLASSIFICATION_LABELS[c]}`]));
-}
-
-$("btn-pick-export").addEventListener("click", async () => {
-  exportPath = (await guard(api.chooseExportFolder())) ?? exportPath;
-  $("export-path").textContent = exportPath ?? "";
-});
-
-$("btn-export").addEventListener("click", async () => {
-  if (!needCase()) return;
-  if (!exportPath) return toast("Choose an export destination", true);
-  const classes = [...exportClasses.querySelectorAll<HTMLInputElement>("input:checked")].map((c) => c.value as Classification);
-  await guard(api.finalize());
-  const r = await guard(api.exportResults(exportPath, classes, (document.getElementById("export-dups") as HTMLInputElement).checked));
-  if (!r) return;
-  $("export-result").textContent = `Exported ${r.exported} files (${r.verification_failures} verification failures, ${r.skipped_no_file} without data) to ${r.destination}`;
-});
-
-$("btn-report").addEventListener("click", async () => {
-  if (!needCase()) return;
-  const r = await guard(api.generateReport());
-  if (r) $("report-result").textContent = `Written: ${r.html} and ${r.json}`;
-});
-$("btn-open-report").addEventListener("click", () => void guard(api.openReport()));
-
-// ---------- init ----------
-
-void refreshDrives();
-void refreshAdb();
-void refreshDevices();
+void loadDrives();
+updateSelected();

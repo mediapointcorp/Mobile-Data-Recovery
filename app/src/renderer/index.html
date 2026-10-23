@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' prmedia:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PhotoRecovery</title>
@@ -13,157 +13,87 @@
   <body>
     <header class="topbar">
       <div class="brand">PhotoRecovery</div>
-      <div class="case" id="case-label">No case open</div>
-      <button id="btn-case" class="primary">Open / create case…</button>
+      <div class="sub">Recover deleted files from your PC, USB sticks and memory cards</div>
+      <button id="btn-new" class="hidden">New scan</button>
     </header>
-    <div class="layout">
-      <nav class="sidebar" aria-label="Sections">
-        <button data-view="pc" class="nav active">This PC</button>
-        <button data-view="device" class="nav">Android device</button>
-        <button data-view="image" class="nav">Storage image</button>
-        <button data-view="folder" class="nav">Backup folder</button>
-        <button data-view="jobs" class="nav">Jobs <span id="jobs-badge" class="badge hidden"></span></button>
-        <button data-view="results" class="nav">Results</button>
-        <button data-view="export" class="nav">Export &amp; report</button>
-        <div class="sidebar-note">
-          Recovery is never guaranteed. Results are labelled by how they were obtained: existing files, deleted-record
-          recovery, carved data, thumbnails and partial images are kept apart.
+
+    <div id="admin-banner" class="banner hidden"></div>
+
+    <!-- Wizard -->
+    <main id="wizard" class="screen">
+      <section class="step" id="step-1">
+        <h1><span class="num">1</span> What type of files are you trying to recover?</h1>
+        <div id="types" class="choices"></div>
+      </section>
+      <section class="step" id="step-2">
+        <h1><span class="num">2</span> Where were the files?</h1>
+        <div class="choices col">
+          <label class="choice"><input type="radio" name="loc" value="all" checked /> <div><b>I'm not sure</b><span>Search all drives</span></div></label>
+          <label class="choice"><input type="radio" name="loc" value="recycle" /> <div><b>In the Recycle Bin</b><span>Files deleted from the Recycle Bin, or still in it</span></div></label>
+          <label class="choice"><input type="radio" name="loc" value="drive" /> <div><b>On a specific drive, USB stick or memory card</b><select id="drive-select"></select></div></label>
+          <label class="choice"><input type="radio" name="loc" value="folder" /> <div><b>In a specific folder</b><span class="row"><input id="folder-input" placeholder="e.g. C:\Users\You\Pictures" /><button id="btn-browse" type="button">Browse…</button></span></div></label>
         </div>
-      </nav>
-      <main id="main">
-        <section id="view-pc" class="view">
-          <h1>Recover deleted photos from this PC</h1>
-          <p class="muted">
-            Scans a drive in place: hard disk, SSD, USB stick or memory card. Deleted NTFS/FAT files are restored from
-            their filesystem records where possible, then free space is searched for photo data.
-          </p>
-          <div class="card note-card">
-            <strong>Before you start:</strong> stop saving files to the drive you want to recover from. The case folder
-            (top right) must be on a <em>different</em> drive, for example a USB disk.
-          </div>
-          <div id="admin-banner" class="card hidden"></div>
-          <div class="row">
-            <button id="btn-refresh-drives">Refresh drives</button>
-            <label><input type="checkbox" id="opt-all-space" /> Search the whole drive, not only free space (slower)</label>
-            <label><input type="checkbox" id="opt-existing" /> Also list photos that still exist</label>
-          </div>
-          <table class="table" id="drive-table">
-            <thead><tr><th>Drive</th><th>Name</th><th>Type</th><th>Size</th><th>Notes</th><th></th></tr></thead>
+        <div id="drive-notes" class="notes"></div>
+      </section>
+      <section class="step" id="step-3">
+        <h1><span class="num">3</span> Ready to search</h1>
+        <label class="check"><input type="checkbox" id="opt-deep" /> <b>Enable Deep Scan</b> — slower; also searches free space for pictures whose file records are gone</label>
+        <p class="tip">Tip: don't save, download or install anything on the drive you're recovering from until you're done.</p>
+        <button id="btn-start" class="primary big">Start</button>
+      </section>
+    </main>
+
+    <!-- Scanning -->
+    <main id="scanning" class="screen hidden">
+      <div class="scanbox">
+        <h1>Searching for deleted files…</h1>
+        <div class="progress"><div id="bar"></div></div>
+        <div id="scan-msg" class="muted"></div>
+        <button id="btn-cancel">Cancel</button>
+      </div>
+    </main>
+
+    <!-- Results -->
+    <main id="results" class="screen hidden">
+      <div class="toolbar">
+        <span id="found-label" class="found"></span>
+        <input id="filter" placeholder="Filter by name or path…" />
+        <label><input type="checkbox" class="st" value="excellent" checked /> <i class="dot excellent"></i>Excellent</label>
+        <label><input type="checkbox" class="st" value="poor" checked /> <i class="dot poor"></i>Poor</label>
+        <label><input type="checkbox" class="st" value="very_poor" checked /> <i class="dot very_poor"></i>Very poor</label>
+        <label><input type="checkbox" class="st" value="unrecoverable" /> <i class="dot unrecoverable"></i>Unrecoverable</label>
+      </div>
+      <div class="split">
+        <div class="tablewrap">
+          <table id="table">
+            <thead>
+              <tr>
+                <th class="c"><input type="checkbox" id="check-all" title="Select all" /></th>
+                <th data-sort="name">Filename</th>
+                <th data-sort="path">Path</th>
+                <th data-sort="modified">Last modified</th>
+                <th data-sort="size" class="r">Size</th>
+                <th data-sort="state">State</th>
+                <th>Comment</th>
+              </tr>
+            </thead>
             <tbody></tbody>
           </table>
-        </section>
+          <div id="more" class="more hidden"><button id="btn-more">Show more</button></div>
+        </div>
+        <aside class="side">
+          <div id="preview" class="preview"><span class="muted">Select a file to see a preview</span></div>
+          <dl id="info"></dl>
+        </aside>
+      </div>
+      <div class="bottombar">
+        <div id="notes" class="muted small"></div>
+        <label><input type="checkbox" id="opt-keep" /> Restore folder structure</label>
+        <span id="selected-label" class="muted"></span>
+        <button id="btn-recover" class="primary">Recover…</button>
+      </div>
+    </main>
 
-        <section id="view-device" class="view hidden">
-          <h1>Android device (USB / ADB)</h1>
-          <div class="card" id="adb-status">Checking for adb…</div>
-          <div class="row">
-            <button id="btn-refresh-devices">Refresh devices</button>
-          </div>
-          <table class="table" id="device-table">
-            <thead><tr><th>Serial</th><th>State</th><th>Model</th><th></th></tr></thead>
-            <tbody></tbody>
-          </table>
-          <div id="device-detail" class="card hidden"></div>
-          <details class="card advanced">
-            <summary>Advanced: rooted, authorized test devices only</summary>
-            <p>
-              Reads a block partition with <code>dd</code> over <code>adb exec-out</code>. The device is only read, but
-              running <code>su</code> may be logged by the root manager. On modern Android, <code>userdata</code> is
-              file-based encrypted: an image of it does not contain readable deleted photos.
-            </p>
-            <div class="row">
-              <label>Serial <input id="root-serial" size="20" /></label>
-              <label>Confirmation <input id="root-confirm" size="44" placeholder="READ-ONLY ROOT ACQUISITION <serial>" /></label>
-              <button id="btn-root-list">List partitions</button>
-            </div>
-            <div class="row">
-              <label>Partition <select id="root-partition"></select></label>
-              <button id="btn-root-acquire" class="danger">Acquire partition image</button>
-            </div>
-          </details>
-        </section>
-
-        <section id="view-image" class="view hidden">
-          <h1>Storage image</h1>
-          <p class="muted">
-            Raw images (<code>dd</code>, <code>.img</code>, SD-card dumps, acquired partitions). The original is opened
-            read-only and hashed before and after analysis.
-          </p>
-          <div class="card">
-            <div class="row"><button id="btn-pick-image">Choose image…</button><span id="image-path" class="mono"></span></div>
-            <div class="row">
-              <label><input type="checkbox" id="opt-working-copy" checked /> Analyse a hash-verified working copy</label>
-              <label><input type="checkbox" id="opt-fs" checked /> Filesystem analysis</label>
-              <label><input type="checkbox" id="opt-carve" checked /> Raw carving</label>
-            </div>
-            <div class="row">
-              Formats:
-              <label><input type="checkbox" class="opt-format" value="jpeg" checked /> JPEG</label>
-              <label><input type="checkbox" class="opt-format" value="png" checked /> PNG</label>
-              <label><input type="checkbox" class="opt-format" value="webp" checked /> WebP</label>
-              <label><input type="checkbox" class="opt-format" value="heic" checked /> HEIC/AVIF</label>
-            </div>
-            <button id="btn-start-image" class="primary">Start scan</button>
-          </div>
-        </section>
-
-        <section id="view-folder" class="view hidden">
-          <h1>Backup or copy folder</h1>
-          <p class="muted">Searches an existing folder (e.g. a phone backup on this PC). Files are copied into the case; the folder is not modified.</p>
-          <div class="card">
-            <div class="row"><button id="btn-pick-folder">Choose folder…</button><span id="folder-path" class="mono"></span></div>
-            <button id="btn-start-folder" class="primary">Start search</button>
-          </div>
-        </section>
-
-        <section id="view-jobs" class="view hidden">
-          <h1>Jobs</h1>
-          <div class="row"><button id="btn-refresh-jobs">Refresh</button></div>
-          <div id="jobs-list"></div>
-        </section>
-
-        <section id="view-results" class="view hidden">
-          <h1>Results</h1>
-          <div class="row toolbar">
-            <button id="btn-finalize">Merge &amp; refresh</button>
-            <label>Class <select id="f-class"><option value="">All</option></select></label>
-            <label>Format <select id="f-format"><option value="">All</option></select></label>
-            <label>Validation <select id="f-valid"><option value="">All</option></select></label>
-            <label>Sort <select id="f-sort">
-              <option value="class">Classification</option>
-              <option value="size">Byte length</option>
-              <option value="pixels">Dimensions</option>
-              <option value="offset">Source offset</option>
-              <option value="path">Source path</option>
-            </select></label>
-            <label><input type="checkbox" id="f-hide-dup" checked /> Hide duplicates</label>
-            <input id="f-search" placeholder="Search path, hash, id…" />
-          </div>
-          <div id="results-summary" class="muted"></div>
-          <div id="results-grid" class="grid"></div>
-          <div class="row"><button id="btn-more" class="hidden">Load more</button></div>
-        </section>
-
-        <section id="view-export" class="view hidden">
-          <h1>Export &amp; report</h1>
-          <div class="card">
-            <h2>Export recovered files</h2>
-            <p class="muted">Copies files to a new, empty folder with a <code>manifest.csv</code>. Every copy is hash-verified.</p>
-            <div id="export-classes" class="row wrap"></div>
-            <label><input type="checkbox" id="export-dups" /> Include duplicates</label>
-            <div class="row"><button id="btn-pick-export">Choose destination…</button><span id="export-path" class="mono"></span></div>
-            <button id="btn-export" class="primary">Export</button>
-            <div id="export-result"></div>
-          </div>
-          <div class="card">
-            <h2>Recovery and evidence-integrity report</h2>
-            <div class="row"><button id="btn-report" class="primary">Generate report</button><button id="btn-open-report">Open report</button></div>
-            <div id="report-result"></div>
-          </div>
-        </section>
-      </main>
-      <aside id="detail" class="detail hidden" aria-label="Result details"></aside>
-    </div>
     <div id="toast" class="toast hidden" role="status"></div>
     <script type="module" src="app.js"></script>
   </body>

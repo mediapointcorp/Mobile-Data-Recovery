@@ -424,36 +424,6 @@ pub struct CarveSink<'a> {
     started: Instant,
 }
 
-impl<'a> CarveSink<'a> {
-    #[allow(clippy::too_many_arguments)]
-    pub fn for_container(
-        case: &'a Case,
-        src: &'a dyn ReadAt,
-        job_id: &str,
-        source_id: &str,
-        container_path: &str,
-        prefix: &str,
-        out: JsonlAppender,
-        progress: &'a dyn Progress,
-    ) -> Self {
-        CarveSink {
-            case,
-            src,
-            job_id: job_id.to_string(),
-            source_id: source_id.to_string(),
-            ctx: CarveContext::ThumbnailContainer {
-                container_path: container_path.to_string(),
-            },
-            name_prefix: prefix.to_string(),
-            out,
-            ids: HashMap::new(),
-            checkpoint: None,
-            progress,
-            started: Instant::now(),
-        }
-    }
-}
-
 impl ScanSink for CarveSink<'_> {
     fn on_candidate(&mut self, found: Found) -> std::io::Result<()> {
         let c = &found.candidate;
@@ -1022,41 +992,4 @@ fn ntfs_recover(
         out.push(r);
     }
     Ok(examined)
-}
-
-/// Carve a thumbnail container file (e.g. `.thumbdata`) already copied to
-/// the case. Returns the number of thumbnails recovered.
-#[allow(clippy::too_many_arguments)]
-pub fn carve_container(
-    case: &Case,
-    job_id: &str,
-    source_id: &str,
-    local: &Path,
-    origin_path: &str,
-    results_path: &Path,
-    cancel: &CancelFlag,
-    progress: &dyn Progress,
-) -> Result<u64> {
-    let src = FileSource::open(local)?;
-    let prefix = format!(
-        "thumbdata_{}",
-        &pr_model::evidence::sha256_file(local, None, |_| {})?.0[..12]
-    );
-    let mut sink = CarveSink::for_container(
-        case,
-        &src,
-        job_id,
-        source_id,
-        origin_path,
-        &prefix,
-        JsonlAppender::open(results_path)?,
-        progress,
-    );
-    let cfg = ScanConfig {
-        formats: FormatSet::jpeg_only(),
-        ..Default::default()
-    };
-    let mut st = ScanState::default();
-    scan(&src, &cfg, &mut st, cancel, &mut sink)?;
-    Ok(st.stats.candidates)
 }

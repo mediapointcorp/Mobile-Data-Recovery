@@ -21,7 +21,6 @@ pub struct Report {
     pub summary: FinalizeSummary,
     pub evidence: Vec<EvidenceRecord>,
     pub jobs: Vec<JobRecord>,
-    pub devices: Vec<serde_json::Value>,
     pub layouts: Vec<serde_json::Value>,
     pub by_source: BTreeMap<String, BTreeMap<String, usize>>,
     pub limitations: Vec<String>,
@@ -35,7 +34,6 @@ pub fn build(case: &Case) -> Result<(Report, Vec<RecoveryResult>)> {
     let (results, summary) = finalize(case)?;
     let mut jobs = Vec::new();
     let mut evidence = Vec::new();
-    let mut devices = Vec::new();
     let mut layouts = Vec::new();
     let mut limitations = Vec::new();
     for id in case.list_job_ids() {
@@ -45,9 +43,6 @@ pub fn build(case: &Case) -> Result<(Report, Vec<RecoveryResult>)> {
         let d = j.dir(case);
         if let Ok(e) = util::read_json::<EvidenceRecord>(&d.join("evidence.json")) {
             evidence.push(e);
-        }
-        if let Ok(v) = util::read_json::<serde_json::Value>(&d.join("device.json")) {
-            devices.push(v);
         }
         if let Ok(v) = util::read_json::<serde_json::Value>(&d.join("layout.json")) {
             layouts.push(v);
@@ -89,7 +84,6 @@ pub fn build(case: &Case) -> Result<(Report, Vec<RecoveryResult>)> {
         summary,
         evidence,
         jobs,
-        devices,
         layouts,
         by_source,
         limitations,
@@ -187,34 +181,6 @@ th{{background:#f4f6f8}}code{{font-size:12px;word-break:break-all}}.ok{{color:#1
                 e.size,
                 esc(&e.sha256_before),
                 esc(e.sha256_after.as_deref().unwrap_or("—"))
-            );
-        }
-        h.push_str("</table>");
-    }
-
-    if !r.devices.is_empty() {
-        h.push_str("<h2>Devices</h2><table><tr><th>Serial</th><th>Model</th><th>Android</th><th>Encryption</th><th>Vendor UI</th></tr>");
-        for d in &r.devices {
-            let g = |p: &str| {
-                d.pointer(p)
-                    .map(|v| {
-                        v.as_str()
-                            .map(String::from)
-                            .unwrap_or_else(|| v.to_string())
-                    })
-                    .unwrap_or_default()
-            };
-            let _ = write!(
-                h,
-                "<tr><td>{}</td><td>{} {}</td><td>{} (SDK {})</td><td>{} / {}</td><td>{}</td></tr>",
-                esc(&g("/info/serial")),
-                esc(&g("/info/brand")),
-                esc(&g("/info/model")),
-                esc(&g("/info/android_version")),
-                esc(&g("/info/sdk")),
-                esc(&g("/capabilities/crypto_state")),
-                esc(&g("/capabilities/crypto_type")),
-                esc(&g("/info/vendor_ui"))
             );
         }
         h.push_str("</table>");

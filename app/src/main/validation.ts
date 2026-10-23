@@ -1,32 +1,30 @@
-// Validation of every request coming from the renderer before it reaches
-// the worker. The renderer is treated as untrusted: it can only refer to
-// filesystem paths the user picked in a native dialog during this session.
+// Validation of every request from the renderer before it reaches the
+// worker. The renderer is treated as untrusted: it can only scan drives the
+// worker listed, and only write to folders the user picked in a dialog.
 
-import type { Classification, StartJob } from "../shared/types";
-import { CLASSIFICATIONS } from "../shared/types";
+import type { Category, ResultsQuery, ScanRequest, State } from "../shared/types";
 
 export class ValidationError extends Error {}
 
-const SERIAL = /^[A-Za-z0-9._:\[\]-]{1,128}$/;
-const PARTITION = /^[A-Za-z0-9_-]{1,64}$/;
-const JOB_ID = /^[A-Za-z0-9-]{1,96}$/;
-const FORMATS = new Set(["jpeg", "png", "webp", "heic"]);
+const CATEGORIES: Category[] = ["all", "pictures", "music", "documents", "video", "compressed", "emails"];
+const STATES: State[] = ["excellent", "poor", "very_poor", "unrecoverable"];
+const SORTS = ["name", "path", "size", "modified", "state"];
 
-export function assertSerial(s: unknown): string {
-  if (typeof s !== "string" || !SERIAL.test(s)) throw new ValidationError("invalid device serial");
-  return s;
-}
+/** Values the user picked in native dialogs (or drives the worker listed). */
+export class Grants {
+  private granted = new Map<string, Set<string>>();
 
-export function assertJobId(s: unknown): string {
-  if (typeof s !== "string" || !JOB_ID.test(s)) throw new ValidationError("invalid job id");
-  return s;
-}
-
-export function assertClassification(c: unknown): Classification {
-  if (typeof c !== "string" || !(CLASSIFICATIONS as readonly string[]).includes(c)) {
-    throw new ValidationError("invalid classification");
+  grant(purpose: "drive" | "recover", value: string): void {
+    if (!this.granted.has(purpose)) this.granted.set(purpose, new Set());
+    this.granted.get(purpose)!.add(value);
   }
-  return c as Classification;
+
+  require(purpose: "drive" | "recover", value: unknown): string {
+    if (typeof value !== "string" || !this.granted.get(purpose)?.has(value)) {
+      throw new ValidationError(purpose === "drive" ? "unknown drive" : "choose the folder with the Browse button");
+    }
+    return value;
+  }
 }
 
 export function assertInt(n: unknown, min: number, max: number): number {
@@ -34,84 +32,42 @@ export function assertInt(n: unknown, min: number, max: number): number {
   return n;
 }
 
-/** Paths the user selected through native dialogs, by purpose. */
-export class GrantedPaths {
-  private granted = new Map<string, Set<string>>();
-
-  grant(purpose: "image" | "folder" | "export" | "case" | "drive", path: string): void {
-    if (!this.granted.has(purpose)) this.granted.set(purpose, new Set());
-    this.granted.get(purpose)!.add(path);
-  }
-
-  require(purpose: "image" | "folder" | "export" | "case" | "drive", path: unknown): string {
-    if (typeof path !== "string" || !this.granted.get(purpose)?.has(path)) {
-      throw new ValidationError(`path was not selected by the user for ${purpose}`);
+export function toScanRequest(r: unknown, grants: Grants): ScanRequest {
+  if (typeof r !== "object" || r === null) throw new ValidationError("invalid scan request");
+  const q = r as ScanRequest;
+  if (!Array.isArray(q.drives) || q.drives.length === 0 || q.drives.length > 26) throw new ValidationError("choose a drive");
+  if (!CATEGORIES.includes(q.category)) throw new ValidationError("invalid file type");
+  if (typeof q.deep_scan !== "boolean" || typeof q.recycle_bin_only !== "boolean") throw new ValidationError("invalid options");
+  let folder: string | null = null;
+  if (q.folder !== null && q.folder !== undefined) {
+    if (typeof q.folder !== "string" || q.folder.length > 1024 || !/^[A-Za-z]:\\/.test(q.folder) || /[\u0000-\u001f]/.test(q.folder)) {
+      throw new ValidationError("invalid folder");
     }
-    return path;
+    folder = q.folder;
   }
+  return {
+    drives: q.drives.map((d) => grants.require("drive", d)),
+    category: q.category,
+    deep_scan: q.deep_scan,
+    folder,
+    recycle_bin_only: q.recycle_bin_only,
+  };
 }
 
-export const CONFIRMATION_PREFIX = "READ-ONLY ROOT ACQUISITION ";
-
-/** Translate a renderer job request into worker `job.start` params. */
-export function toWorkerJob(job: unknown, paths: GrantedPaths): Record<string, unknown> {
-  if (typeof job !== "object" || job === null) throw new ValidationError("invalid job");
-  const j = job as StartJob;
-  switch (j.kind) {
-    case "image_scan": {
-      if (!Array.isArray(j.formats) || j.formats.length === 0 || !j.formats.every((f) => FORMATS.has(f))) {
-        throw new ValidationError("invalid formats");
-      }
-      if (typeof j.working_copy !== "boolean" || typeof j.filesystem_analysis !== "boolean" || typeof j.carve !== "boolean") {
-        throw new ValidationError("invalid options");
-      }
-      if (!j.filesystem_analysis && !j.carve) throw new ValidationError("select filesystem analysis, carving or both");
-      return {
-        kind: "image_scan",
-        image_path: paths.require("image", j.image),
-        evidence_mode: j.working_copy ? "working_copy" : "read_only_original",
-        formats: j.formats.join(","),
-        filesystem_analysis: j.filesystem_analysis,
-        carve: j.carve,
-      };
-    }
-    case "drive_scan": {
-      if (typeof j.all_space !== "boolean" || typeof j.include_existing !== "boolean") throw new ValidationError("invalid options");
-      return {
-        kind: "drive_scan",
-        drive: paths.require("drive", j.drive),
-        carve_scope: j.all_space ? "all" : "unallocated",
-        include_existing: j.include_existing,
-      };
-    }
-    case "local_scan":
-      return { kind: "local_scan", dir: paths.require("folder", j.dir) };
-    case "device_acquire":
-      return { kind: "device_acquire", serial: assertSerial(j.serial) };
-    case "partition_acquire": {
-      const serial = assertSerial(j.serial);
-      if (typeof j.partition !== "string" || !PARTITION.test(j.partition)) throw new ValidationError("invalid partition");
-      if (j.confirmation !== CONFIRMATION_PREFIX + serial) {
-        throw new ValidationError(`type the confirmation exactly: ${CONFIRMATION_PREFIX}${serial}`);
-      }
-      return { kind: "partition_acquire", serial, partition: j.partition, confirmation: j.confirmation };
-    }
-    default:
-      throw new ValidationError("unknown job kind");
+export function toResultsQuery(r: unknown): ResultsQuery {
+  if (typeof r !== "object" || r === null) throw new ValidationError("invalid query");
+  const q = r as ResultsQuery;
+  if (!SORTS.includes(q.sort)) throw new ValidationError("invalid sort");
+  if (q.states !== null && (!Array.isArray(q.states) || !q.states.every((s) => STATES.includes(s)))) {
+    throw new ValidationError("invalid states");
   }
-}
-
-/**
- * Resolve a case-relative result path for the preview protocol. Rejects
- * absolute paths, drive letters, traversal and odd characters; the caller
- * must still verify the real path is inside the case root.
- */
-export function safeRelative(rel: string): string | null {
-  if (rel.length === 0 || rel.length > 1024) return null;
-  if (rel.startsWith("/") || rel.startsWith("\\") || /^[A-Za-z]:/.test(rel)) return null;
-  const parts = rel.split(/[\\/]/);
-  if (parts.some((p) => p === ".." || p === "" || p === ".")) return null;
-  if (!(parts[0] === "recovered" || parts[0] === "acquired")) return null;
-  if (/[\u0000-\u001f<>|"?*]/.test(rel)) return null;
-  return parts.join("/");
+  if (q.text !== null && (typeof q.text !== "string" || q.text.length > 500)) throw new ValidationError("invalid text");
+  return {
+    offset: assertInt(q.offset, 0, 1e9),
+    limit: assertInt(q.limit, 1, 5000),
+    sort: q.sort,
+    descending: q.descending === true,
+    text: q.text,
+    states: q.states,
+  };
 }

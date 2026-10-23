@@ -1,130 +1,113 @@
-//! `photorecovery-worker` — local service for the desktop UI and a CLI for
-//! headless use.
+//! `photorecovery-worker` — the engine behind the PhotoRecovery app, and a
+//! command-line tool. Run it from an administrator terminal to scan drives.
 
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use pr_model::evidence::EvidenceMode;
 use pr_model::model::Classification;
 use pr_worker::case::Case;
-use pr_worker::jobs::{
-    self, device::DeviceParams, image::ImageScanParams, local::LocalScanParams, JobParams,
-    JobRecord, JobStatus,
-};
-use pr_worker::{finalize, report, server, Progress};
+use pr_worker::jobs::{self, image::ImageScanParams, JobParams, JobRecord, JobStatus};
+use pr_worker::recover::{self, Category, ScanRequest, State};
+use pr_worker::{drives, finalize, report, server, Progress};
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 
 #[derive(Parser)]
 #[command(
     name = "photorecovery-worker",
     version,
-    about = "PhotoRecovery engine: carving, filesystem and Android acquisition"
+    about = "PhotoRecovery: recover deleted files from Windows drives"
 )]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum FileType {
+    All,
+    Pictures,
+    Music,
+    Documents,
+    Video,
+    Compressed,
+    Emails,
+}
+
+impl From<FileType> for Category {
+    fn from(t: FileType) -> Self {
+        match t {
+            FileType::All => Category::All,
+            FileType::Pictures => Category::Pictures,
+            FileType::Music => Category::Music,
+            FileType::Documents => Category::Documents,
+            FileType::Video => Category::Video,
+            FileType::Compressed => Category::Compressed,
+            FileType::Emails => Category::Emails,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Cmd {
-    /// JSON-lines service on stdin/stdout (used by the desktop app).
+    /// Service for the desktop app (JSON lines on stdin/stdout).
     Serve,
-    /// Scan a raw evidence image (filesystem analysis + carving).
+    /// List drives that can be scanned.
+    Drives,
+    /// Scan drives for deleted files and optionally recover them.
+    Scan {
+        /// Drive letters, e.g. `--drive D: --drive E:`.
+        #[arg(long, required = true)]
+        drive: Vec<String>,
+        #[arg(long, value_enum, default_value = "pictures")]
+        r#type: FileType,
+        /// Also search free space for pictures whose records are gone.
+        #[arg(long)]
+        deep: bool,
+        /// Only files that were in this folder, e.g. `D:\Photos`.
+        #[arg(long)]
+        folder: Option<String>,
+        /// Only files that were in the Recycle Bin.
+        #[arg(long)]
+        recycle_bin: bool,
+        /// Recover files in Excellent/Poor state into this folder (on another drive).
+        #[arg(long)]
+        recover_to: Option<PathBuf>,
+        /// Recreate the original folder structure under --recover-to.
+        #[arg(long)]
+        keep_folders: bool,
+    },
+    /// Advanced: analyse a raw disk image file with a forensic case folder
+    /// (hashes, audit log, report).
     ScanImage {
         #[arg(long)]
         case: PathBuf,
         #[arg(long)]
         image: PathBuf,
-        /// Analyse a hash-verified working copy instead of the original.
         #[arg(long)]
         working_copy: bool,
-        /// Comma-separated: jpeg,png,webp,heic
-        #[arg(long)]
-        formats: Option<String>,
-        #[arg(long)]
-        no_fs: bool,
-        #[arg(long)]
-        no_carve: bool,
-        #[arg(long)]
-        chunk_mib: Option<u32>,
-    },
-    /// List PC drives and disks that can be scanned.
-    Drives,
-    /// Scan a PC drive in place for deleted photos (needs administrator).
-    ScanDrive {
-        #[arg(long)]
-        case: PathBuf,
-        /// `D:`, `PhysicalDrive1` (Windows) or `sdb` (Linux).
-        #[arg(long)]
-        drive: String,
-        /// Carve the whole drive instead of only free space.
-        #[arg(long)]
-        all_space: bool,
-        /// Also list photos that still exist.
-        #[arg(long)]
-        include_existing: bool,
         #[arg(long)]
         formats: Option<String>,
     },
-    /// Search an existing local folder (backups, copies) for images.
-    ScanDir {
-        #[arg(long)]
-        case: PathBuf,
-        #[arg(long)]
-        dir: PathBuf,
-    },
-    /// List connected Android devices.
-    Devices {
-        #[arg(long)]
-        adb: Option<String>,
-    },
-    /// Show device identification and storage capabilities.
-    DeviceInfo {
-        #[arg(long)]
-        serial: String,
-        #[arg(long)]
-        adb: Option<String>,
-    },
-    /// Copy accessible images from a device (read-only) and classify them.
-    AcquireDevice {
-        #[arg(long)]
-        case: PathBuf,
-        #[arg(long)]
-        serial: String,
-        /// Device roots to search (repeatable). Default: /sdcard/ and SD cards.
-        #[arg(long)]
-        root: Vec<String>,
-        #[arg(long)]
-        adb: Option<String>,
-    },
-    /// Resume an interrupted or cancelled job.
+    /// Advanced: resume an interrupted image scan.
     Resume {
         #[arg(long)]
         case: PathBuf,
         #[arg(long)]
         job: String,
     },
-    /// List jobs in a case.
-    Jobs {
-        #[arg(long)]
-        case: PathBuf,
-    },
-    /// Merge results and write report.json / report.html.
+    /// Advanced: write report.json / report.html for a case.
     Report {
         #[arg(long)]
         case: PathBuf,
     },
-    /// Export result files to a separate destination with a manifest.
+    /// Advanced: export a case's results with a manifest.
     Export {
         #[arg(long)]
         case: PathBuf,
         #[arg(long)]
         dest: PathBuf,
-        /// Classifications (snake_case, repeatable). Default: all with files.
-        #[arg(long)]
-        class: Vec<String>,
         #[arg(long)]
         include_duplicates: bool,
     },
@@ -137,7 +120,7 @@ impl Progress for CliProgress {
         let pct = if total > 0 {
             format!("{:5.1}%", done as f64 * 100.0 / total as f64)
         } else {
-            format!("{done}")
+            String::new()
         };
         let mut e = std::io::stderr();
         let _ = write!(e, "\r[{phase}] {pct} {message:<70.70}");
@@ -153,75 +136,110 @@ fn abs(p: PathBuf) -> Result<PathBuf> {
     })
 }
 
-fn run_new(case: &Case, params: JobParams) -> Result<()> {
-    let mut rec = jobs::create_job(case, params)?;
-    run_existing(case, &mut rec)
-}
-
-fn run_existing(case: &Case, rec: &mut JobRecord) -> Result<()> {
-    let cancel = pr_model::new_cancel_flag();
-    let c2 = cancel.clone();
-    let _ = ctrlc_flag(c2);
-    eprintln!("job {}", rec.id);
-    let status = jobs::run_job(case, rec, &cancel, &CliProgress)?;
+fn run_job(case: &Case, rec: &mut JobRecord) -> Result<()> {
+    let status = jobs::run_job(case, rec, &pr_model::new_cancel_flag(), &CliProgress)?;
     eprintln!();
     for l in &rec.limitations {
-        eprintln!("limitation: {l}");
+        eprintln!("note: {l}");
     }
     match status {
         JobStatus::Completed => {
-            let (_, s) = finalize::finalize(case)?;
-            println!("{}", serde_json::to_string_pretty(&s)?);
-            Ok(())
-        }
-        JobStatus::Cancelled => {
-            eprintln!(
-                "cancelled; resume with: photorecovery-worker resume --case {} --job {}",
-                case.root.display(),
-                rec.id
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&finalize::finalize(case)?.1)?
             );
             Ok(())
         }
+        JobStatus::Cancelled => Ok(()),
         _ => bail!("job failed: {}", rec.error.clone().unwrap_or_default()),
     }
 }
 
-/// Cancel on stdin "q\n" (portable; no signal handling dependency).
-fn ctrlc_flag(flag: pr_model::CancelFlag) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let mut line = String::new();
-        while std::io::stdin()
-            .read_line(&mut line)
-            .map(|n| n > 0)
-            .unwrap_or(false)
-        {
-            if line.trim() == "q" {
-                flag.store(true, Ordering::Relaxed);
-                return;
-            }
-            line.clear();
-        }
-    })
-}
-
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    match cli.cmd {
+    match Cli::parse().cmd {
         Cmd::Serve => {
-            let srv = server::Server::new(Box::new(std::io::stdout()));
-            srv.serve(std::io::stdin().lock())
+            server::Server::new(Box::new(std::io::stdout())).serve(std::io::stdin().lock())
+        }
+        Cmd::Drives => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({ "administrator": drives::is_elevated(), "drives": drives::list() })
+                )?
+            );
+            Ok(())
+        }
+        Cmd::Scan {
+            drive,
+            r#type,
+            deep,
+            folder,
+            recycle_bin,
+            recover_to,
+            keep_folders,
+        } => {
+            let req = ScanRequest {
+                drives: drive,
+                category: r#type.into(),
+                deep_scan: deep,
+                folder,
+                recycle_bin_only: recycle_bin,
+            };
+            let progress = |d: &str, phase: &str, done: u64, total: u64, msg: &str| {
+                let pct = if total > 0 {
+                    done as f64 * 100.0 / total as f64
+                } else {
+                    0.0
+                };
+                eprint!("\r{d} {phase} {pct:5.1}% {msg:<50.50}");
+            };
+            let (files, summary) =
+                recover::scan_drives(&req, &pr_model::new_cancel_flag(), &progress)?;
+            eprintln!();
+            for f in &files {
+                println!(
+                    "{:<13} {:>12}  {:<19}  {}",
+                    format!("{:?}", f.state),
+                    f.size,
+                    f.modified.clone().unwrap_or_default(),
+                    f.path
+                );
+            }
+            for n in &summary.notes {
+                eprintln!("note: {n}");
+            }
+            eprintln!("{} files found in {:.1} s", files.len(), summary.seconds);
+            if let Some(dest) = recover_to {
+                let pick: Vec<_> = files
+                    .iter()
+                    .filter(|f| matches!(f.state, State::Excellent | State::Poor))
+                    .collect();
+                let open = |d: &str| -> Result<std::sync::Arc<dyn pr_model::source::ReadAt>> {
+                    Ok(std::sync::Arc::new(pr_model::device::open_device(
+                        &drives::device_path(d)?,
+                    )?))
+                };
+                let s = recover::recover(
+                    &pick,
+                    &abs(dest)?,
+                    keep_folders,
+                    &open,
+                    &|p, d| drives::path_on_drive(p, d),
+                    &pr_model::new_cancel_flag(),
+                    &|_, _| {},
+                )?;
+                println!("{}", serde_json::to_string_pretty(&s)?);
+            }
+            Ok(())
         }
         Cmd::ScanImage {
             case,
             image,
             working_copy,
             formats,
-            no_fs,
-            no_carve,
-            chunk_mib,
         } => {
             let case = Case::open_or_create(&abs(case)?)?;
-            run_new(
+            let mut rec = jobs::create_job(
                 &case,
                 JobParams::ImageScan(ImageScanParams {
                     image_path: abs(image)?.display().to_string(),
@@ -231,100 +249,19 @@ fn main() -> Result<()> {
                         EvidenceMode::ReadOnlyOriginal
                     },
                     formats,
-                    filesystem_analysis: !no_fs,
-                    carve: !no_carve,
-                    chunk_size_mib: chunk_mib,
+                    filesystem_analysis: true,
+                    carve: true,
+                    chunk_size_mib: None,
                     carve_scope: Default::default(),
                     include_existing: true,
                 }),
-            )
-        }
-        Cmd::Drives => {
-            let v = serde_json::json!({ "elevated": pr_worker::drives::is_elevated(), "drives": pr_worker::drives::list() });
-            println!("{}", serde_json::to_string_pretty(&v)?);
-            Ok(())
-        }
-        Cmd::ScanDrive {
-            case,
-            drive,
-            all_space,
-            include_existing,
-            formats,
-        } => {
-            let case = Case::open_or_create(&abs(case)?)?;
-            run_new(
-                &case,
-                JobParams::DriveScan(pr_worker::jobs::drive::DriveScanParams {
-                    drive,
-                    formats,
-                    carve_scope: if all_space {
-                        pr_worker::jobs::image::CarveScope::All
-                    } else {
-                        pr_worker::jobs::image::CarveScope::Unallocated
-                    },
-                    include_existing,
-                    chunk_size_mib: None,
-                }),
-            )
-        }
-        Cmd::ScanDir { case, dir } => {
-            let case = Case::open_or_create(&abs(case)?)?;
-            run_new(
-                &case,
-                JobParams::LocalScan(LocalScanParams {
-                    dir: abs(dir)?.display().to_string(),
-                    max_files: None,
-                }),
-            )
-        }
-        Cmd::Devices { adb } => {
-            let c = jobs::device::client(adb.as_deref())?;
-            println!("{}", serde_json::to_string_pretty(&c.list_devices()?)?);
-            Ok(())
-        }
-        Cmd::DeviceInfo { serial, adb } => {
-            let c = jobs::device::client(adb.as_deref())?;
-            let v = serde_json::json!({ "info": c.device_info(&serial)?, "capabilities": c.capabilities(&serial)? });
-            println!("{}", serde_json::to_string_pretty(&v)?);
-            Ok(())
-        }
-        Cmd::AcquireDevice {
-            case,
-            serial,
-            root,
-            adb,
-        } => {
-            let case = Case::open_or_create(&abs(case)?)?;
-            run_new(
-                &case,
-                JobParams::DeviceAcquire(DeviceParams {
-                    serial,
-                    roots: (!root.is_empty()).then_some(root),
-                    include_external_storage: true,
-                    adb_path: adb,
-                    max_files: None,
-                }),
-            )
+            )?;
+            run_job(&case, &mut rec)
         }
         Cmd::Resume { case, job } => {
             let case = Case::open_or_create(&abs(case)?)?;
             let mut rec = JobRecord::load(&case, &job)?;
-            run_existing(&case, &mut rec)
-        }
-        Cmd::Jobs { case } => {
-            let case = Case::open_or_create(&abs(case)?)?;
-            for id in case.list_job_ids() {
-                let j = JobRecord::load(&case, &id)?;
-                println!(
-                    "{}  {:<18} {:?}  runs={}  results={}",
-                    j.id,
-                    j.params.kind(),
-                    j.status,
-                    j.runs,
-                    j.results(&case).len()
-                );
-            }
-            Ok(())
+            run_job(&case, &mut rec)
         }
         Cmd::Report { case } => {
             let case = Case::open_or_create(&abs(case)?)?;
@@ -335,24 +272,23 @@ fn main() -> Result<()> {
         Cmd::Export {
             case,
             dest,
-            class,
             include_duplicates,
         } => {
             let case = Case::open_or_create(&abs(case)?)?;
-            let classes: BTreeSet<Classification> = if class.is_empty() {
-                Classification::ALL
-                    .into_iter()
-                    .filter(|c| *c != Classification::UnavailableSourceData)
-                    .collect()
-            } else {
-                class
-                    .iter()
-                    .map(|c| serde_json::from_value(serde_json::json!(c)))
-                    .collect::<Result<_, _>>()?
-            };
+            let classes: BTreeSet<Classification> = Classification::ALL
+                .into_iter()
+                .filter(|c| *c != Classification::UnavailableSourceData)
+                .collect();
             finalize::finalize(&case)?;
-            let s = finalize::export(&case, &abs(dest)?, &classes, include_duplicates)?;
-            println!("{}", serde_json::to_string_pretty(&s)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&finalize::export(
+                    &case,
+                    &abs(dest)?,
+                    &classes,
+                    include_duplicates
+                )?)?
+            );
             Ok(())
         }
     }

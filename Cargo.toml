@@ -5,7 +5,6 @@ members = [
     "crates/carve",
     "crates/validate",
     "crates/fs",
-    "crates/adb",
     "crates/worker",
     "crates/testkit",
     "crates/bench",
@@ -22,7 +21,6 @@ pr-model = { path = "crates/model" }
 pr-carve = { path = "crates/carve" }
 pr-validate = { path = "crates/validate" }
 pr-fs = { path = "crates/fs" }
-pr-adb = { path = "crates/adb" }
 pr-testkit = { path = "crates/testkit" }
 
 anyhow = "1.0.100"
@@ -38,7 +36,7 @@ serde_json = "1.0.140"
 sha2 = "0.10.9"
 tempfile = "3.20"
 thiserror = "2.0"
-time = { version = "0.3.41", features = ["formatting", "macros"] }
+time = { version = "0.3.41", features = ["formatting", "parsing", "macros"] }
 uuid = { version = "1.17", features = ["v4", "serde"] }
 
 [profile.release]

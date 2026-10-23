@@ -122,7 +122,12 @@ mod tests {
     use pr_model::model::{ImageFormat, RecoveryMethod};
 
     fn r(class: Classification, sha: &str, ph: &str, path: &str) -> RecoveryResult {
-        let mut x = RecoveryResult::new("s", RecoveryMethod::AdbFileCopy, ImageFormat::Jpeg, class);
+        let mut x = RecoveryResult::new(
+            "s",
+            RecoveryMethod::FilesystemLiveEntry,
+            ImageFormat::Jpeg,
+            class,
+        );
         x.sha256 = Some(sha.into());
         x.perceptual_hash = Some(ph.into());
         x.source_path = Some(path.into());

@@ -85,8 +85,6 @@ impl Classification {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum RecoveryMethod {
-    /// File copied from an accessible device location via `adb pull`.
-    AdbFileCopy,
     /// File found in a user-selected local folder (e.g. an existing backup).
     LocalDirectoryScan,
     /// Live (allocated) file read from a parsed filesystem in an image.
@@ -196,14 +194,13 @@ pub enum ValidationStatus {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
-    AndroidDevice,
     EvidenceImage,
     LocalDirectory,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct SourceRef {
-    /// Stable identifier, e.g. `adb:<serial>` or `image:<sha256 prefix>`.
+    /// Stable identifier, e.g. `drive:E:` or `image:<sha256 prefix>`.
     pub source_id: String,
     pub kind: SourceKind,
     pub description: String,

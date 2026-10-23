@@ -2,7 +2,7 @@
   "name": "photorecovery",
   "productName": "PhotoRecovery",
   "version": "0.1.0",
-  "description": "Forensically careful photo recovery for Android devices and storage images",
+  "description": "Recover deleted files from Windows drives, USB sticks and memory cards",
   "license": "UNLICENSED",
   "private": true,
   "main": "dist/main/main/main.js",
@@ -25,12 +25,29 @@
   "build": {
     "appId": "com.mediapoint.photorecovery",
     "productName": "PhotoRecovery",
-    "directories": { "output": "release" },
-    "files": ["dist/**/*", "package.json"],
-    "extraResources": [
-      { "from": "../target/release/photorecovery-worker.exe", "to": "bin/photorecovery-worker.exe" }
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
     ],
-    "win": { "target": ["nsis"], "requestedExecutionLevel": "asInvoker" },
-    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true }
+    "extraResources": [
+      {
+        "from": "../target/release/photorecovery-worker.exe",
+        "to": "bin/photorecovery-worker.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

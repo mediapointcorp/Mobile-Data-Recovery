@@ -11,8 +11,7 @@ use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DriveInfo {
-    /// Identifier accepted by drive scans: `C:` / `PhysicalDrive1` on
-    /// Windows, `sdb` / `nvme0n1` on Linux.
+    /// Identifier accepted by drive scans: `C:` or `PhysicalDrive1`.
     pub id: String,
     pub device_path: String,
     /// `volume` (a drive letter / partition) or `disk` (whole physical disk).
@@ -32,6 +31,7 @@ pub struct DriveInfo {
 }
 
 impl DriveInfo {
+    #[cfg_attr(not(windows), allow(dead_code))]
     fn add_notes(&mut self) {
         if self.ssd == Some(true) {
             self.notes.push(if self.trim != Some(false) {
@@ -50,7 +50,8 @@ impl DriveInfo {
     }
 }
 
-/// Validate a drive identifier and return its raw device path.
+/// Validate a drive identifier (`C:` or `PhysicalDriveN`) and return its
+/// raw device path. Drive scanning is Windows-only.
 pub fn device_path(id: &str) -> Result<String> {
     if cfg!(windows) {
         let b = id.as_bytes();
@@ -62,8 +63,12 @@ pub fn device_path(id: &str) -> Result<String> {
                 return Ok(format!(r"\\.\PhysicalDrive{n}"));
             }
         }
-    } else if !id.is_empty() && id.len() <= 32 && id.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Ok(format!("/dev/{id}"));
+    }
+    #[cfg(not(windows))]
+    if let Some((tid, path)) = test_drive() {
+        if id == tid {
+            return Ok(path);
+        }
     }
     bail!("invalid drive identifier {id:?}")
 }
@@ -311,53 +316,6 @@ mod win {
     }
 }
 
-#[cfg(not(windows))]
-mod unix {
-    use super::DriveInfo;
-
-    pub fn list() -> Vec<DriveInfo> {
-        let mut out = Vec::new();
-        let Ok(rd) = std::fs::read_dir("/sys/block") else {
-            return out;
-        };
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("zram") {
-                continue;
-            }
-            let base = e.path();
-            let read = |f: &str| {
-                std::fs::read_to_string(base.join(f))
-                    .ok()
-                    .map(|s| s.trim().to_string())
-            };
-            let size = read("size")
-                .and_then(|s| s.parse::<u64>().ok())
-                .map(|s| s * 512);
-            let rotational = read("queue/rotational").map(|s| s == "1");
-            let removable = read("removable").is_some_and(|s| s == "1");
-            let mut d = DriveInfo {
-                id: name.clone(),
-                device_path: format!("/dev/{name}"),
-                kind: "disk".into(),
-                label: None,
-                filesystem: None,
-                size,
-                free: None,
-                drive_type: if removable { "removable" } else { "fixed" }.into(),
-                ssd: rotational.map(|r| !r),
-                trim: None,
-                is_system: false,
-                notes: vec![],
-            };
-            d.add_notes();
-            out.push(d);
-        }
-        out.sort_by(|a, b| a.id.cmp(&b.id));
-        out
-    }
-}
-
 pub fn list() -> Vec<DriveInfo> {
     #[cfg(windows)]
     {
@@ -365,8 +323,36 @@ pub fn list() -> Vec<DriveInfo> {
     }
     #[cfg(not(windows))]
     {
-        unix::list()
+        // PhotoRecovery scans Windows drives only. For development and UI
+        // tests elsewhere, PHOTORECOVERY_TEST_DRIVE=<image file> exposes an
+        // image as drive E:.
+        test_drive()
+            .map(|(_, path)| {
+                vec![DriveInfo {
+                    id: "E:".into(),
+                    device_path: path.clone(),
+                    kind: "volume".into(),
+                    label: Some("TEST IMAGE".into()),
+                    filesystem: None,
+                    size: std::fs::metadata(&path).ok().map(|m| m.len()),
+                    free: None,
+                    drive_type: "removable".into(),
+                    ssd: None,
+                    trim: None,
+                    is_system: false,
+                    notes: vec![],
+                }]
+            })
+            .unwrap_or_default()
     }
+}
+
+#[cfg(not(windows))]
+fn test_drive() -> Option<(String, String)> {
+    std::env::var("PHOTORECOVERY_TEST_DRIVE")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .map(|p| ("E:".to_string(), p))
 }
 
 /// True when the process can open raw devices (Administrator on Windows).
@@ -377,11 +363,7 @@ pub fn is_elevated() -> bool {
     }
     #[cfg(not(windows))]
     {
-        // SAFETY: geteuid has no preconditions.
-        unsafe extern "C" {
-            fn geteuid() -> u32;
-        }
-        unsafe { geteuid() == 0 }
+        test_drive().is_some()
     }
 }
 
@@ -413,31 +395,8 @@ pub fn path_on_drive(path: &Path, id: &str) -> bool {
     }
     #[cfg(not(windows))]
     {
-        use std::os::unix::fs::MetadataExt;
-        let dev = pr_model::evidence::canonicalize_lenient(path)
-            .ancestors()
-            .find_map(|a| std::fs::metadata(a).ok())
-            .map(|m| m.dev());
-        let Some(dev) = dev else { return true };
-        let (maj, min) = (
-            ((dev >> 8) & 0xfff) as u32,
-            ((dev & 0xff) | ((dev >> 12) & 0xfff00)) as u32,
-        );
-        let mine = format!("{maj}:{min}");
-        // The disk itself or any of its partitions.
-        let base = std::path::PathBuf::from("/sys/block").join(id);
-        let mut devs = vec![std::fs::read_to_string(base.join("dev"))
-            .unwrap_or_default()
-            .trim()
-            .to_string()];
-        if let Ok(rd) = std::fs::read_dir(&base) {
-            for e in rd.flatten() {
-                if let Ok(d) = std::fs::read_to_string(e.path().join("dev")) {
-                    devs.push(d.trim().to_string());
-                }
-            }
-        }
-        devs.contains(&mine)
+        let _ = path;
+        test_drive().is_none_or(|(tid, _)| tid != id) // unknown: refuse
     }
 }
 
@@ -456,9 +415,10 @@ mod tests {
             assert!(device_path("PhysicalDrive").is_err());
             assert!(device_path(r"C:\Windows").is_err());
         } else {
-            assert_eq!(device_path("sdb").unwrap(), "/dev/sdb");
-            assert!(device_path("../etc/passwd").is_err());
-            assert!(device_path("sdb; rm").is_err());
+            assert!(
+                device_path("sdb").is_err(),
+                "drive scanning is Windows-only"
+            );
         }
         assert!(device_path("").is_err());
     }

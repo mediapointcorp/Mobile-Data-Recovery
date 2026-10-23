@@ -1,0 +1,32 @@
+[
+  {
+    "path": "/DCIM/100MEDIA/IMG_0000.jpg",
+    "scenario": "live",
+    "sha256": "0985185ae88130fdac9fcd1c99e9c0fe7d6dc92d7a4ada451d42439eb77ec232"
+  },
+  {
+    "path": "/DCIM/100MEDIA/IMG_0001.jpg",
+    "scenario": "live",
+    "sha256": "4193290df8b671e67f98813915fb7453a97cd18ded83be90eef1b3fd1367eb24"
+  },
+  {
+    "path": "/DCIM/100MEDIA/IMG_0002.jpg",
+    "scenario": "deleted",
+    "sha256": "7f6355e9a3560f3cf99a7acf7930612b6bd9dc2681f6618ea856e3132f98dd13"
+  },
+  {
+    "path": "/DCIM/100MEDIA/IMG_0003.jpg",
+    "scenario": "deleted",
+    "sha256": "67fe60e1070b6615cd4742619171f08941a3585164fd7614ab2ecb90b442b53f"
+  },
+  {
+    "path": "/DCIM/100MEDIA/IMG_0004.jpg",
+    "scenario": "deleted_fragmented",
+    "sha256": "8a253e8308b715ece77313543ded103ee96fb804892c312b4bc7885672063925"
+  },
+  {
+    "path": "/Documents/report.pdf",
+    "scenario": "deleted",
+    "sha256": "1bda247aa6cc5d8e9060d0101aa8c230df6c38a5124cde402ebc41547495c8b4"
+  }
+]

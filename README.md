@@ -1,163 +1,99 @@
 # PhotoRecovery
 
-PhotoRecovery recovers deleted photos on Windows. It scans the PC's own drives (hard disks, SSDs, USB sticks, memory cards) and raw storage images, and it can also copy photos from Android phones connected over USB. It is careful about forensics: it never writes to the source, records hashes and an audit trail, and labels every result by how it was obtained.
+PhotoRecovery recovers deleted files on Windows. It works like Recuva: choose the type of file, choose where the files were, and it lists what can be brought back. Each file gets a state from **Excellent** to **Unrecoverable**, and you can preview pictures and recover the files you tick to a folder of your choice.
 
-> **Recovery is never guaranteed.** Deleted photos can be recovered only when their data is still present, readable and not encrypted.
-> - **Hard disks, USB sticks, memory cards:** good chances until the space is reused.
-> - **SSDs:** Windows' TRIM usually makes the SSD erase deleted data within minutes, so chances are low.
-> - **Modern Android phones:** internal storage is encrypted, so deleted photos there generally **cannot** be recovered by any tool.
->
-> PhotoRecovery reports these limits instead of producing anything that looks like a recovery.
+It works on internal hard disks and SSDs, USB sticks, memory cards and external drives formatted **NTFS, FAT32 or exFAT**.
 
-## What it does
+> **Recovery is never guaranteed.** A deleted file can come back only while its data is still on the drive.
+> - Every file you save afterwards can overwrite it, so stop using the drive and scan as soon as possible.
+> - On SSDs, Windows' TRIM usually erases deleted data within minutes, so chances there are low.
+> - PhotoRecovery shows such files as *Unrecoverable* instead of pretending.
 
-| Source | What you get | Classification |
-|---|---|---|
-| **PC drive** (`C:`, `D:`, USB stick, memory card, or a whole disk), scanned in place; needs administrator rights | Deleted NTFS and FAT files restored from their filesystem records, fragmented NTFS files included. Then carving of the drive's free space only, so photos that still exist aren't listed | Deleted-file record, Carved image, Partial image, Thumbnail, Unavailable source data |
-| Android phone over ADB (no root) | Copies of every accessible image in shared storage (`/sdcard`, SD cards), including hidden folders, thumbnail caches, app media and the Android 11+ system trash (`.trashed-*`) | Existing original / Existing duplicate / Thumbnail |
-| Backup or copy folder on the PC | The same search over a local folder | Existing original / duplicate / Thumbnail |
-| Raw image (SD-card dump, `dd` image, acquired partition) | Filesystem analysis (live and deleted FAT and NTFS entries), then structure-aware carving of the whole image | Deleted-file record, Carved image, Partial image, Thumbnail, Unverified candidate, Unavailable source data |
-| Rooted, authorized **test** device (advanced) | A read-only `dd` image of a chosen partition, which you then scan as a raw image | — (it becomes evidence) |
+## How to use it
 
-Every result records its source, method, format, offset, length, dimensions, SHA-256, perceptual hash, validation status, classification, output path, warnings, limitations and associations (duplicate of, similar to, thumbnail of, embedded in).
+1. **Install** `PhotoRecovery Setup 0.1.0.exe`. When you start the app, Windows asks for administrator permission, because reading a drive directly needs it. PhotoRecovery only reads the drive.
+2. **What type of files?** Pictures, Music, Documents, Video, Compressed, Emails or All files.
+3. **Where were the files?**
+   - *I'm not sure* (all drives)
+   - *In the Recycle Bin*
+   - *On a specific drive, USB stick or memory card*
+   - *In a specific folder*
+4. **Deep Scan** (optional): slower. It also searches free space for pictures whose file records are gone.
+5. **Results:** filename, original path, date, size, state and a comment. Click a picture to preview it, tick the files you want, and click **Recover…**.
+6. **Choose a folder on a different drive** (for example a USB stick). PhotoRecovery refuses to write onto the drive you are recovering from, because that could overwrite the files you want back.
 
-## Architecture in one picture
+| State | Meaning |
+|---|---|
+| 🟢 Excellent | None of the file's data has been reused; it should come back intact. |
+| 🟡 Poor | Part of the data was overwritten; the file may be damaged. |
+| 🟠 Very poor | Most of the data was overwritten, or the start of the file no longer matches its type. |
+| 🔴 Unrecoverable | The data is gone: overwritten, erased to zeros (SSD TRIM) or encrypted. It cannot be recovered. |
 
-```
-┌──────────────── Windows desktop app (Electron + TypeScript) ────────────────┐
-│ sandboxed renderer ──(fixed preload API)──► main process ──(stdio JSON)──┐ │
-└──────────────────────────────────────────────────────────────────────────┼─┘
-                                                                           ▼
-┌────────────────────────── photorecovery-worker (Rust) ────────────────────────┐
-│ jobs: drive scan · image scan · device acquire · folder scan · partition (root)│
-│ pr-adb ─ pr-fs ─ pr-carve ─ pr-validate ─ pr-model (results, evidence, audit) │
-└───────────────────────────────────────────────────────────────────────────────┘
-```
+## What it finds
 
-The UI never runs commands. It talks to the worker only through a fixed set of typed requests over the worker's stdin/stdout, with no network port. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and the reasons behind each language choice.
+| Situation | Found? |
+|---|---|
+| File deleted normally and **still in the Recycle Bin** | ✅ shown with its original name and folder; you can also restore it from the Recycle Bin |
+| Recycle Bin **emptied** | ✅ if the space has not been reused; original name restored from Windows' Recycle Bin info file |
+| **Shift+Delete** (permanent delete) | ✅ if the space has not been reused (NTFS, FAT, exFAT) |
+| Large or fragmented files on NTFS | ✅ read through NTFS's own record of where the pieces were |
+| Fragmented files on FAT/exFAT | ⚠️ often only partly, because these filesystems forget the pieces on delete |
+| Formatted, RAW or damaged drive | ⚠️ Deep Scan finds pictures (JPEG, PNG, WebP, HEIC) by content, without names |
+| Deleted from an SSD a while ago | ❌ usually erased by TRIM, shown as Unrecoverable |
+| BitLocker drive | Unlock it in Windows first, then scan it |
 
-## Quick start (Windows 10/11)
+## Building from source (Windows 10/11)
 
 ```powershell
-# 1. Prerequisites (Rust, Node.js LTS, Android platform-tools) — see docs/WINDOWS_BUILD.md
-powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1
-
-# 2. Build and test everything
-powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
-
-# 3. Run the desktop app
-cd app; npm start
-
-# 4. (optional) Installer: app\release\PhotoRecovery Setup <version>.exe
+powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1     # Rust, Node.js, VS Build Tools (asks first)
 powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -Installer
 ```
 
-To connect a phone, see [docs/USB_ADB_SETUP.md](docs/USB_ADB_SETUP.md). It covers enabling USB debugging on realme UI.
+The installer is written to `app\release\`. For development, run `cd app; npm start` from an administrator terminal. See [docs/WINDOWS_BUILD.md](docs/WINDOWS_BUILD.md).
 
-### Recovering deleted photos from this PC
-
-1. Stop saving files to the drive that held the photos.
-2. Start PhotoRecovery **as administrator**. Right-click → *Run as administrator*, or use the **Restart as administrator** button on the *This PC* screen. Windows only lets administrators read a drive directly. PhotoRecovery only reads it.
-3. Click **Open / create case** and choose a folder on a **different** drive, for example a USB disk. The app refuses to scan the drive that holds the case folder, because writing there could overwrite the photos you want back.
-4. On **This PC**, click **Scan for deleted photos** next to the drive.
-5. When the job completes, open **Results**. *Deleted-file record* results are complete files restored from the filesystem. *Carved* and *Partial* results came from free space.
+Every push also builds the installer on GitHub Actions. To download it, open the latest run → **Summary** → **Artifacts** → `photorecovery-windows-installer`.
 
 ### Command line
 
-The worker is also a complete CLI:
+The engine is also a command-line tool. Run it from an administrator terminal:
 
 ```text
 photorecovery-worker drives
-photorecovery-worker scan-drive --case E:\Cases\pc1 --drive D:            # run in an administrator terminal
-photorecovery-worker devices
-photorecovery-worker device-info --serial <SERIAL>
-photorecovery-worker acquire-device --case D:\Cases\phone1 --serial <SERIAL>
-photorecovery-worker scan-image --case D:\Cases\sd1 --image E:\dumps\sdcard.img --working-copy
-photorecovery-worker scan-dir   --case D:\Cases\backup --dir E:\PhoneBackup
-photorecovery-worker jobs       --case D:\Cases\sd1
-photorecovery-worker resume     --case D:\Cases\sd1 --job <JOB-ID>
-photorecovery-worker report     --case D:\Cases\sd1
-photorecovery-worker export     --case D:\Cases\sd1 --dest F:\Recovered --class carved_image --class deleted_file_record
+photorecovery-worker scan --drive E: --type pictures
+photorecovery-worker scan --drive D: --type documents --folder "D:\Work" --recover-to F:\Recovered --keep-folders
+photorecovery-worker scan --drive E: --type pictures --deep --recover-to F:\Recovered
 ```
 
-Type `q` and press Enter to cancel a running CLI job. Every job can be resumed.
-
-### Try it without a phone
-
-```bash
-cargo run --release -p pr-bench -- fixtures --out fixtures
-cargo run --release -p photorecovery-worker -- scan-image --case "$PWD/cases/demo" --image fixtures/sdcard-fat32.img
-cargo run --release -p photorecovery-worker -- report --case "$PWD/cases/demo"
-```
-
-`sdcard-fat32.img` is a FAT32 SD card with three live and three deleted photos. `raw-disk.img` mixes intact, truncated, corrupted, fragmented, duplicated, thumbnail-only and fake-signature data. Each image comes with a ground-truth manifest.
-
-## Recovery strategy (in order)
-
-1. Discover accessible existing originals (device shared storage, backup folders).
-2. Search copies, the system trash, thumbnail caches and `.thumbdata` containers. Containers are carved.
-3. Acquire supported evidence without modification: hash-verified `adb pull`, read-only image access, or read-only `dd` on rooted test devices.
-4. Identify the partition table and filesystems. Parse supported filesystem metadata: FAT12/16/32 directory entries, and NTFS MFT records with their preserved run lists.
-5. Carve raw data for JPEG (fully), PNG, WebP and HEIC/AVIF (structure only).
-6. Validate (structure walk **and** decode), hash, deduplicate, link thumbnails, classify.
-7. Export to a separate folder with a verified manifest, and generate the recovery and evidence-integrity report.
-
-## Repository layout
+## Project layout
 
 ```
+app/          Windows desktop app (Electron + TypeScript): wizard, results, preview, recover
 crates/
-  model/     result model, read-only sources, evidence hashing, hash-chained audit log
-  carve/     streaming resumable scanner + JPEG/PNG/WebP/HEIF structure parsers
-  validate/  structural + decode validation, SHA-256, dHash, EXIF, dedupe, thumbnail matching
-  fs/        GPT/MBR, filesystem identification, encryption hints, FAT and NTFS deleted-file recovery
-  adb/       allowlisted read-only ADB operations, discovery classification
-  worker/    jobs, checkpoints, JSON-lines service, CLI, reports, export
-  testkit/   deterministic fixtures: real JPEG/PNG/WebP encodes, FAT32 builder, ground-truth disks
-  bench/     ground-truth benchmark harness and fixture generator
-app/         Electron + TypeScript desktop UI
-docs/        architecture, setup, acquisition, integrity, security, benchmarks
-scripts/     Windows setup and build scripts
+  worker/     recovery engine (recover.rs), drive access, app service, CLI
+  fs/         NTFS, FAT12/16/32 and exFAT parsers with deleted-file recovery; partition tables
+  carve/      deep scan: finds JPEG/PNG/WebP/HEIC by structure in free space
+  validate/   picture checks (structure + decode), hashes
+  model/      raw drive access (read-only, sector-aligned), shared types
+  testkit/    test-file generators
+  bench/      benchmarks
+docs/         how it works, build, security, test results
 ```
 
 ## Testing
 
-```bash
-cargo test --workspace                 # Rust unit + integration tests (synthetic ground truth)
-cargo clippy --workspace --all-targets
-cd app && npm ci && npm run typecheck && npm test
-cargo run --release -p pr-bench -- run --out bench-out   # metrics → bench-out/bench.md
+```powershell
+cargo test --workspace
+cd app; npm ci; npm run typecheck; npm test
 ```
 
-The tests cover:
-
-- intact JPEG variants: baseline, progressive, restart intervals, EXIF thumbnails;
-- signatures split at every position around a chunk boundary, and identical results across chunk sizes from 64 B to 8 MiB;
-- truncated, corrupted, fragmented and spliced files, and fake signatures;
-- duplicates and thumbnail-only scenarios;
-- FAT live, deleted, overwritten and fragmented-deleted files;
-- NTFS on a **real** volume made by `mkntfs`, with files deleted by the `ntfs-3g` driver: live, deleted, fragmented (7+ runs) and overwritten. The independent `ntfsundelete` tool is used as a reference;
-- drive-scan mode: free-space-only carving, deleted-only reporting, aligned raw-device reads, and refusal when the case folder is on the scanned drive;
-- unsupported (ext4/F2FS), encrypted (LUKS, high-entropy) and sparse sources;
-- interrupted and resumed scans, which must produce identical results;
-- evidence hashes before and after analysis, and audit-chain tamper detection;
-- ADB command construction and quoting, and the root confirmation gate;
-- the service protocol, plus UI-side request validation.
+Recovery is tested against real disk images. They were made with the real NTFS and exFAT filesystem drivers, with files deleted in every common way: Shift+Delete, Recycle Bin, emptied Recycle Bin, fragmented, and overwritten. Every recovered file is checked byte-for-byte against the original. On GitHub's Windows machines, a test also reads the live `C:` drive through the same raw-access path the app uses. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Documentation
 
-- [Architecture and language selection](docs/ARCHITECTURE.md)
-- [Windows installation and build](docs/WINDOWS_BUILD.md)
-- [USB / ADB setup (realme)](docs/USB_ADB_SETUP.md)
-- [Acquisition adapters and support limits](docs/ACQUISITION.md)
-- [Evidence integrity](docs/EVIDENCE_INTEGRITY.md)
+- [How it works](docs/HOW_IT_WORKS.md)
+- [Building on Windows](docs/WINDOWS_BUILD.md)
 - [Security review](docs/SECURITY_REVIEW.md)
-- [Benchmarks and known limitations](docs/BENCHMARKS.md)
-
-## Status
-
-Version 0.1.0 includes PC drive scanning, NTFS and FAT deleted-file recovery, a working JPEG carver, PNG/WebP/HEIF structure carving, ADB acquisition and the desktop UI.
-- NTFS parsing is tested against real NTFS volumes, and in CI against the live Windows system drive.
-- Phone acquisition **has not been validated on physical phones yet**. ADB behaviour is covered by unit tests with recorded command output, and all recovery metrics come from synthetic ground truth. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for what that does and does not show.
+- [Testing and results](docs/TESTING.md)
 
 ## License
 

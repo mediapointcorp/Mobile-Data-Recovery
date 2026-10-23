@@ -18,17 +18,20 @@ pr-model.workspace = true
 pr-carve.workspace = true
 pr-validate.workspace = true
 pr-fs.workspace = true
-pr-adb.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+image.workspace = true
+time.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Threading"] }
 
 [dev-dependencies]
+sha2.workspace = true
+hex.workspace = true
 flate2 = "1"
 pr-testkit.workspace = true
 tempfile.workspace = true

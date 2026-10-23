@@ -14,7 +14,6 @@ pub enum VolumeKind {
     Ext4,
     F2fs,
     Luks,
-    AndroidSparse,
     Unknown,
 }
 
@@ -33,7 +32,7 @@ pub enum SupportLevel {
 #[serde(rename_all = "snake_case")]
 pub enum EncryptionState {
     NotDetected,
-    /// Filesystem advertises per-file encryption (Android FBE).
+    /// Filesystem advertises per-file encryption (fscrypt).
     FileBasedCapable,
     /// Container is a known encrypted volume format.
     FullVolume,
@@ -164,11 +163,6 @@ pub fn identify_volume(
         v.notes.push("LUKS encrypted volume: contents cannot be analysed without the key; this tool does not attempt decryption".into());
         return v;
     }
-    if head.len() >= 4 && le32(&head, 0) == 0xED26_FF3A {
-        v.kind = VolumeKind::AndroidSparse;
-        v.notes.push("Android sparse image: convert to a raw image first (e.g. `simg2img`) — raw offsets inside a sparse file are not disk offsets".into());
-        return v;
-    }
     if let Some(k) = boot_sector_kind(&head) {
         v.kind = k;
         match k {
@@ -186,8 +180,8 @@ pub fn identify_volume(
                 v.notes.push("FAT: live and deleted directory entries are parsed; deleted files are read assuming contiguous allocation and validated".into());
             }
             VolumeKind::ExFat => {
-                v.support = SupportLevel::IdentificationOnly;
-                v.notes.push("exFAT (common on SD cards > 32 GB): identified; deleted-record parsing not yet implemented — covered by raw carving".into());
+                v.support = SupportLevel::DeletedRecordRecovery;
+                v.notes.push("exFAT: live and deleted directory entries are parsed; contiguous (NoFatChain) files are located exactly".into());
             }
             _ => {
                 v.support = SupportLevel::DeletedRecordRecovery;
@@ -216,7 +210,7 @@ pub fn identify_volume(
         v.notes.push("ext4 clears extent mappings when files are deleted, so deleted-record recovery is not offered; unallocated space is covered by raw carving".into());
         if incompat & 0x10000 != 0 {
             v.encryption = EncryptionState::FileBasedCapable;
-            v.notes.push("encryption feature enabled (Android file-based encryption): file contents in encrypted directories are ciphertext on disk; carving cannot recover them without keys, which this tool does not have".into());
+            v.notes.push("encryption feature enabled (file-based encryption): file contents in encrypted directories are ciphertext on disk; carving cannot recover them without keys, which this tool does not have".into());
         }
         return v;
     }
@@ -233,7 +227,7 @@ pub fn identify_volume(
         v.notes.push("F2FS writes out of place and invalidates node blocks on delete; deleted-record recovery is not offered; covered by raw carving".into());
         if features & 0x1 != 0 {
             v.encryption = EncryptionState::FileBasedCapable;
-            v.notes.push("encryption feature enabled (Android file-based encryption): user file contents are ciphertext on disk".into());
+            v.notes.push("encryption feature enabled (file-based encryption): user file contents are ciphertext on disk".into());
         }
         return v;
     }
@@ -396,7 +390,7 @@ pub fn analyze_layout(src: &dyn ReadAt) -> ImageLayout {
             v.encryption = EncryptionState::LikelyEncryptedOrRandom;
         }
         layout.notes.push(format!(
-            "{:.0}% of sampled blocks are near-random ({entropy:.2} bits/byte) and no filesystem was found: the source is most likely encrypted (e.g. Android full-disk or file-based encryption). Carving is still attempted but cannot recover images from ciphertext.",
+            "{:.0}% of sampled blocks are near-random ({entropy:.2} bits/byte) and no filesystem was found: the source is most likely encrypted (for example BitLocker without the drive unlocked, or full-disk encryption). Carving is still attempted but cannot recover images from ciphertext.",
             high * 100.0
         ));
     }
@@ -434,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn identifies_f2fs_luks_sparse() {
+    fn identifies_f2fs_and_luks() {
         let mut d = vec![0u8; 8192];
         d[1024..1028].copy_from_slice(&0xF2F5_2010u32.to_le_bytes());
         assert_eq!(
@@ -445,12 +439,6 @@ mod tests {
         d[..6].copy_from_slice(b"LUKS\xBA\xBE");
         let l = analyze_layout(&MemSource::new(d));
         assert_eq!(l.volumes[0].encryption, EncryptionState::FullVolume);
-        let mut d = vec![0u8; 8192];
-        d[..4].copy_from_slice(&0xED26_FF3Au32.to_le_bytes());
-        assert_eq!(
-            analyze_layout(&MemSource::new(d)).volumes[0].kind,
-            VolumeKind::AndroidSparse
-        );
     }
 
     #[test]
