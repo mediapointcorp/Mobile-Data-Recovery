@@ -58,6 +58,13 @@ enum Cmd {
         #[arg(long, default_value = "bench-out")]
         out: PathBuf,
     },
+    /// Write sample evidence (raw disk + FAT32 SD-card image) with manifests.
+    Fixtures {
+        #[arg(long, default_value = "fixtures")]
+        out: PathBuf,
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+    },
     /// Internal: carve an image without exporting; print timing and memory.
     CarveOnly {
         #[arg(long)]
@@ -329,6 +336,30 @@ fn pct(x: f64) -> String {
 
 fn main() -> Result<()> {
     match Cli::parse().cmd {
+        Cmd::Fixtures { out, seed } => {
+            std::fs::create_dir_all(&out)?;
+            let (disk, manifest) = standard_disk(&StandardDiskParams { seed, ..Default::default() });
+            std::fs::write(out.join("raw-disk.img"), &disk)?;
+            std::fs::write(out.join("raw-disk.manifest.json"), serde_json::to_vec_pretty(&manifest)?)?;
+            let mut b = FatBuilder::new(40, 1);
+            b.mkdir("DCIM");
+            b.mkdir("DCIM/Camera");
+            let mut truth = Vec::new();
+            for i in 0..6u64 {
+                let j = images::jpeg(640, 480, seed + i, &JpegOpts { exif_thumbnail: true, exif_datetime: Some(format!("2024:06:0{} 09:00:00", i + 1)), ..Default::default() });
+                let p = format!("DCIM/Camera/IMG_2024060{}_090000.jpg", i + 1);
+                b.add_file(&p, &j);
+                let deleted = i % 2 == 1;
+                if deleted {
+                    b.delete(&p);
+                }
+                truth.push(serde_json::json!({ "path": format!("/{p}"), "deleted": deleted, "sha256": sha256_hex(&j) }));
+            }
+            std::fs::write(out.join("sdcard-fat32.img"), b.finish())?;
+            std::fs::write(out.join("sdcard-fat32.manifest.json"), serde_json::to_vec_pretty(&truth)?)?;
+            println!("wrote fixtures to {}", out.display());
+            Ok(())
+        }
         Cmd::CarveOnly { image, chunk_mib } => {
             println!("{}", serde_json::to_string(&carve_only(&image, chunk_mib)?)?);
             Ok(())

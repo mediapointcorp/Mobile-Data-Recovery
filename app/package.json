@@ -1,0 +1,36 @@
+{
+  "name": "photorecovery",
+  "productName": "PhotoRecovery",
+  "version": "0.1.0",
+  "description": "Forensically careful photo recovery for Android devices and storage images",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "dist/main/main/main.js",
+  "scripts": {
+    "build": "npm run build:main && npm run build:renderer && npm run copy:static",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "tsc -p tsconfig.renderer.json",
+    "copy:static": "node scripts/copy-static.mjs",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/test/*.test.js\"",
+    "start": "npm run build && electron .",
+    "dist:win": "npm run build && electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.0.0",
+    "typescript": "~5.9.3"
+  },
+  "build": {
+    "appId": "com.mediapoint.photorecovery",
+    "productName": "PhotoRecovery",
+    "directories": { "output": "release" },
+    "files": ["dist/**/*", "package.json"],
+    "extraResources": [
+      { "from": "../target/release/photorecovery-worker.exe", "to": "bin/photorecovery-worker.exe" }
+    ],
+    "win": { "target": ["nsis"], "requestedExecutionLevel": "asInvoker" },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true }
+  }
+}

@@ -5,3 +5,4 @@
 /cases/
 *.img.tmp
 .DS_Store
+/app/dist-test/
