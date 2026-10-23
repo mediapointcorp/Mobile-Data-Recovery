@@ -49,10 +49,114 @@ fn to_image_format(f: ImageFormat) -> Option<ImgFmt> {
     }
 }
 
+/// Result of walking the file with the carving parsers.
+enum Structure {
+    /// No structural parser for this format.
+    NotChecked,
+    Complete {
+        trailing: usize,
+    },
+    Truncated(String),
+    Corrupt(String),
+}
+
+fn structure(data: &[u8], format: ImageFormat) -> Structure {
+    use pr_carve::{scanner::parse_at, CarveLimits, EndStatus, ParseOutcome};
+    if !matches!(
+        format,
+        ImageFormat::Jpeg
+            | ImageFormat::Png
+            | ImageFormat::Webp
+            | ImageFormat::Heic
+            | ImageFormat::Avif
+    ) {
+        return Structure::NotChecked;
+    }
+    let len = data.len() as u64;
+    let limits = CarveLimits {
+        max_jpeg: len,
+        max_png: len,
+        max_webp: len,
+        max_heif: len,
+        ..Default::default()
+    };
+    let src = pr_model::source::MemSource::new(data.to_vec());
+    match parse_at(&src, format, 0, &limits) {
+        Ok(ParseOutcome::Candidate(c)) => match c.status {
+            EndStatus::Complete => Structure::Complete {
+                trailing: (len - c.length) as usize,
+            },
+            EndStatus::Truncated => Structure::Truncated(c.end_reason.unwrap_or_default()),
+            EndStatus::Corrupt => Structure::Corrupt(format!(
+                "{} at byte {}",
+                c.end_reason.unwrap_or_default(),
+                c.length
+            )),
+        },
+        Ok(ParseOutcome::Rejected(why)) => Structure::Corrupt(why),
+        Err(e) => Structure::Corrupt(e.to_string()),
+    }
+}
+
 /// Validate an in-memory candidate. `structurally_complete` tells the
 /// validator whether the carver reached the format's end structure; a
 /// partial file that happens to decode is still reported as truncated.
-pub fn validate_bytes(data: &[u8], format: ImageFormat, structurally_complete: bool) -> ValidationReport {
+///
+/// Decoders are lenient — they render corrupted or spliced entropy data
+/// without error — so a file is only `Valid` when the structural walk
+/// (segments, restart markers, CRCs, box layout) *and* decoding succeed.
+pub fn validate_bytes(
+    data: &[u8],
+    format: ImageFormat,
+    structurally_complete: bool,
+) -> ValidationReport {
+    let mut rep = validate_decode(data, format, structurally_complete);
+    match structure(data, format) {
+        Structure::NotChecked => {}
+        Structure::Complete { trailing } => {
+            if trailing > 0 {
+                rep.warnings.push(format!(
+                    "{trailing} bytes follow the end-of-image structure"
+                ));
+                if rep.status == ValidationStatus::Valid {
+                    rep.status = ValidationStatus::ValidWithWarnings;
+                }
+            }
+        }
+        Structure::Truncated(why) => {
+            rep.warnings
+                .push(format!("structure check: truncated ({why})"));
+            if matches!(
+                rep.status,
+                ValidationStatus::Valid
+                    | ValidationStatus::ValidWithWarnings
+                    | ValidationStatus::StructureOnly
+            ) {
+                rep.status = ValidationStatus::Truncated;
+            }
+        }
+        Structure::Corrupt(why) => {
+            rep.warnings
+                .push(format!("structure check: damaged ({why})"));
+            if matches!(
+                rep.status,
+                ValidationStatus::Valid
+                    | ValidationStatus::ValidWithWarnings
+                    | ValidationStatus::StructureOnly
+                    | ValidationStatus::DecodeFailed
+            ) {
+                rep.status = ValidationStatus::Corrupt;
+            }
+        }
+    }
+    rep
+}
+
+fn validate_decode(
+    data: &[u8],
+    format: ImageFormat,
+    structurally_complete: bool,
+) -> ValidationReport {
     let sha256 = pr_model::evidence::sha256_bytes(data);
     let mut rep = ValidationReport {
         status: ValidationStatus::NotValidated,
@@ -110,7 +214,9 @@ pub fn validate_bytes(data: &[u8], format: ImageFormat, structurally_complete: b
 
 /// 64-bit difference hash: 9x8 grayscale, compare horizontal neighbours.
 pub fn dhash(img: &image::DynamicImage) -> u64 {
-    let small = img.resize_exact(9, 8, image::imageops::FilterType::Triangle).to_luma8();
+    let small = img
+        .resize_exact(9, 8, image::imageops::FilterType::Triangle)
+        .to_luma8();
     let mut h = 0u64;
     for y in 0..8 {
         for x in 0..8 {
@@ -147,13 +253,21 @@ pub fn read_exif(data: &[u8]) -> BTreeMap<String, String> {
     ];
     for (tag, key) in fields {
         if let Some(f) = ex.get_field(tag, exif::In::PRIMARY) {
-            let v = f.display_value().to_string().trim_matches('"').trim().to_string();
+            let v = f
+                .display_value()
+                .to_string()
+                .trim_matches('"')
+                .trim()
+                .to_string();
             if !v.is_empty() {
                 out.insert(key.to_string(), v);
             }
         }
     }
-    if ex.get_field(exif::Tag::JPEGInterchangeFormat, exif::In::THUMBNAIL).is_some() {
+    if ex
+        .get_field(exif::Tag::JPEGInterchangeFormat, exif::In::THUMBNAIL)
+        .is_some()
+    {
         out.insert("exif_has_thumbnail".into(), "true".into());
     }
     out
@@ -166,12 +280,27 @@ mod tests {
 
     #[test]
     fn valid_jpeg_with_exif() {
-        let j = images::jpeg(320, 200, 3, &JpegOpts { exif_datetime: Some("2022:02:03 04:05:06".into()), exif_thumbnail: true, ..Default::default() });
+        let j = images::jpeg(
+            320,
+            200,
+            3,
+            &JpegOpts {
+                exif_datetime: Some("2022:02:03 04:05:06".into()),
+                exif_thumbnail: true,
+                ..Default::default()
+            },
+        );
         let r = validate_bytes(&j, ImageFormat::Jpeg, true);
         assert_eq!(r.status, ValidationStatus::Valid);
         assert_eq!((r.width, r.height), (Some(320), Some(200)));
-        assert_eq!(r.metadata.get("exif_datetime_original").map(String::as_str), Some("2022-02-03 04:05:06"));
-        assert_eq!(r.metadata.get("exif_has_thumbnail").map(String::as_str), Some("true"));
+        assert_eq!(
+            r.metadata.get("exif_datetime_original").map(String::as_str),
+            Some("2022-02-03 04:05:06")
+        );
+        assert_eq!(
+            r.metadata.get("exif_has_thumbnail").map(String::as_str),
+            Some("true")
+        );
         assert!(r.dhash.is_some());
     }
 
@@ -181,7 +310,13 @@ mod tests {
         let mut cut = j[..j.len() / 2].to_vec();
         cut.extend_from_slice(&[0xFF, 0xD9]);
         let r = validate_bytes(&cut, ImageFormat::Jpeg, false);
-        assert!(matches!(r.status, ValidationStatus::Truncated | ValidationStatus::Corrupt), "{r:?}");
+        assert!(
+            matches!(
+                r.status,
+                ValidationStatus::Truncated | ValidationStatus::Corrupt
+            ),
+            "{r:?}"
+        );
     }
 
     #[test]
@@ -189,8 +324,18 @@ mod tests {
         let mut g = vec![0xFF, 0xD8, 0xFF, 0xE0];
         g.extend_from_slice(&[0x55; 300]);
         let r = validate_bytes(&g, ImageFormat::Jpeg, true);
-        assert_eq!(r.status, ValidationStatus::DecodeFailed);
+        assert_eq!(r.status, ValidationStatus::Corrupt);
         assert!(r.decode_error.is_some());
+    }
+
+    #[test]
+    fn spliced_foreign_data_is_not_valid_even_if_decodable() {
+        let j = images::jpeg(320, 240, 5, &JpegOpts::default());
+        let mut spliced = j[..j.len() / 2].to_vec();
+        spliced.extend_from_slice(&pr_testkit::Rng::new(3).bytes(4096));
+        spliced.extend_from_slice(&j[j.len() / 2 + 4096..]);
+        let r = validate_bytes(&spliced, ImageFormat::Jpeg, true);
+        assert_eq!(r.status, ValidationStatus::Corrupt, "{r:?}");
     }
 
     #[test]
@@ -202,8 +347,26 @@ mod tests {
 
     #[test]
     fn dhash_similar_for_reencoded_and_different_for_other() {
-        let a = image::load_from_memory(&images::jpeg(400, 300, 11, &JpegOpts { quality: 90, ..Default::default() })).unwrap();
-        let b = image::load_from_memory(&images::jpeg(400, 300, 11, &JpegOpts { quality: 40, ..Default::default() })).unwrap();
+        let a = image::load_from_memory(&images::jpeg(
+            400,
+            300,
+            11,
+            &JpegOpts {
+                quality: 90,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+        let b = image::load_from_memory(&images::jpeg(
+            400,
+            300,
+            11,
+            &JpegOpts {
+                quality: 40,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
         let t = image::load_from_memory(&images::embedded_thumbnail(400, 300, 11)).unwrap();
         let c = image::load_from_memory(&images::jpeg(400, 300, 12, &JpegOpts::default())).unwrap();
         assert!(hamming(dhash(&a), dhash(&b)) <= 6);

@@ -21,7 +21,12 @@ pub fn parse_png(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Resu
     let mut idat_bytes = 0u64;
     let mut have_ihdr = false;
 
-    let finish = |mut cand: ParsedCandidate, cut: u64, status: EndStatus, why: String, have_ihdr: bool, idat: u64| {
+    let finish = |mut cand: ParsedCandidate,
+                  cut: u64,
+                  status: EndStatus,
+                  why: String,
+                  have_ihdr: bool,
+                  idat: u64| {
         if !have_ihdr || idat == 0 {
             return ParseOutcome::Rejected(format!("no image data: {why}"));
         }
@@ -35,11 +40,25 @@ pub fn parse_png(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Resu
         chunks += 1;
         let chunk_pos = c.position();
         if chunks > limits.max_structures {
-            return Ok(finish(cand, chunk_pos, EndStatus::Corrupt, "too many chunks".into(), have_ihdr, idat_bytes));
+            return Ok(finish(
+                cand,
+                chunk_pos,
+                EndStatus::Corrupt,
+                "too many chunks".into(),
+                have_ihdr,
+                idat_bytes,
+            ));
         }
         let mut hdr = [0u8; 8];
         if !c.read_exact(&mut hdr)? {
-            return Ok(finish(cand, chunk_pos, EndStatus::Truncated, "source ended before IEND".into(), have_ihdr, idat_bytes));
+            return Ok(finish(
+                cand,
+                chunk_pos,
+                EndStatus::Truncated,
+                "source ended before IEND".into(),
+                have_ihdr,
+                idat_bytes,
+            ));
         }
         let len = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
         let ty = [hdr[4], hdr[5], hdr[6], hdr[7]];
@@ -54,7 +73,9 @@ pub fn parse_png(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Resu
             ));
         }
         if chunks == 1 && (&ty != b"IHDR" || len != 13) {
-            return Ok(ParseOutcome::Rejected("first chunk is not a valid IHDR".into()));
+            return Ok(ParseOutcome::Rejected(
+                "first chunk is not a valid IHDR".into(),
+            ));
         }
         // Stream the chunk data through the CRC.
         let mut crc = crc32fast::Hasher::new();
@@ -66,8 +87,19 @@ pub fn parse_png(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Resu
             let buf = c.buffered()?;
             if buf.is_empty() {
                 let pos = c.position();
-                return Ok(finish(cand, if &ty == b"IDAT" { pos } else { chunk_pos }, EndStatus::Truncated,
-                    "source ended inside chunk".into(), have_ihdr, idat_bytes + if &ty == b"IDAT" { len as u64 - remaining } else { 0 }));
+                return Ok(finish(
+                    cand,
+                    if &ty == b"IDAT" { pos } else { chunk_pos },
+                    EndStatus::Truncated,
+                    "source ended inside chunk".into(),
+                    have_ihdr,
+                    idat_bytes
+                        + if &ty == b"IDAT" {
+                            len as u64 - remaining
+                        } else {
+                            0
+                        },
+                ));
             }
             let n = (buf.len() as u64).min(remaining) as usize;
             if first && &ty == b"IHDR" && n >= 13 {
@@ -79,7 +111,14 @@ pub fn parse_png(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Resu
             remaining -= n as u64;
         }
         let Some(stored) = c.read_u32_be()? else {
-            return Ok(finish(cand, chunk_pos, EndStatus::Truncated, "source ended before chunk CRC".into(), have_ihdr, idat_bytes));
+            return Ok(finish(
+                cand,
+                chunk_pos,
+                EndStatus::Truncated,
+                "source ended before chunk CRC".into(),
+                have_ihdr,
+                idat_bytes,
+            ));
         };
         if stored != crc.finalize() {
             let tyname = String::from_utf8_lossy(&ty).to_string();
@@ -90,7 +129,10 @@ pub fn parse_png(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Resu
                 cand,
                 chunk_pos,
                 EndStatus::Corrupt,
-                format!("CRC mismatch in {tyname} chunk at +{} — possible corruption or fragmentation", chunk_pos - start),
+                format!(
+                    "CRC mismatch in {tyname} chunk at +{} — possible corruption or fragmentation",
+                    chunk_pos - start
+                ),
                 have_ihdr,
                 idat_bytes,
             ));
@@ -101,12 +143,17 @@ pub fn parse_png(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Resu
                 let h = u32::from_be_bytes([ihdr[4], ihdr[5], ihdr[6], ihdr[7]]);
                 let depth = ihdr[8];
                 let color = ihdr[9];
-                if w == 0 || h == 0 || !matches!(depth, 1 | 2 | 4 | 8 | 16) || !matches!(color, 0 | 2 | 3 | 4 | 6) {
+                if w == 0
+                    || h == 0
+                    || !matches!(depth, 1 | 2 | 4 | 8 | 16)
+                    || !matches!(color, 0 | 2 | 3 | 4 | 6)
+                {
                     return Ok(ParseOutcome::Rejected("IHDR values invalid".into()));
                 }
                 cand.width = Some(w);
                 cand.height = Some(h);
-                cand.diagnostics.push(format!("IHDR {w}x{h}, depth {depth}, color type {color}"));
+                cand.diagnostics
+                    .push(format!("IHDR {w}x{h}, depth {depth}, color type {color}"));
                 have_ihdr = true;
             }
             b"IDAT" => idat_bytes += len as u64,
@@ -116,7 +163,8 @@ pub fn parse_png(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Resu
                 }
                 cand.length = c.position() - start;
                 cand.status = EndStatus::Complete;
-                cand.diagnostics.push(format!("{chunks} chunks, {idat_bytes} IDAT bytes"));
+                cand.diagnostics
+                    .push(format!("{chunks} chunks, {idat_bytes} IDAT bytes"));
                 return Ok(ParseOutcome::Candidate(cand));
             }
             _ => {}

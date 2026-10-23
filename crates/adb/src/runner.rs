@@ -48,7 +48,11 @@ impl ProcessRunner {
     /// Locate adb: explicit path, `PATH`, then common Windows SDK locations.
     pub fn locate(explicit: Option<&Path>) -> Result<PathBuf, AdbError> {
         if let Some(p) = explicit {
-            return if p.is_file() { Ok(p.to_path_buf()) } else { Err(AdbError::AdbNotFound) };
+            return if p.is_file() {
+                Ok(p.to_path_buf())
+            } else {
+                Err(AdbError::AdbNotFound)
+            };
         }
         let exe = if cfg!(windows) { "adb.exe" } else { "adb" };
         let mut candidates: Vec<PathBuf> = std::env::var_os("PATH")
@@ -60,14 +64,26 @@ impl ProcessRunner {
             }
         }
         if let Some(d) = std::env::var_os("LOCALAPPDATA") {
-            candidates.push(PathBuf::from(d).join("Android").join("Sdk").join("platform-tools").join(exe));
+            candidates.push(
+                PathBuf::from(d)
+                    .join("Android")
+                    .join("Sdk")
+                    .join("platform-tools")
+                    .join(exe),
+            );
         }
-        candidates.into_iter().find(|p| p.is_file()).ok_or(AdbError::AdbNotFound)
+        candidates
+            .into_iter()
+            .find(|p| p.is_file())
+            .ok_or(AdbError::AdbNotFound)
     }
 
     fn command(&self, args: &[String]) -> Command {
         let mut c = Command::new(&self.adb_path);
-        c.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        c.args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

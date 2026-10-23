@@ -12,12 +12,15 @@ use pr_model::source::{read_vec_at, Cursor, ReadAt};
 use std::io;
 
 const TOP_LEVEL: [&[u8; 4]; 12] = [
-    b"ftyp", b"meta", b"mdat", b"free", b"skip", b"uuid", b"moov", b"moof", b"mfra", b"idat", b"wide", b"pdin",
+    b"ftyp", b"meta", b"mdat", b"free", b"skip", b"uuid", b"moov", b"moof", b"mfra", b"idat",
+    b"wide", b"pdin",
 ];
 
 pub fn heif_brand_format(brand: &[u8]) -> Option<ImageFormat> {
     match brand {
-        b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1" => Some(ImageFormat::Heic),
+        b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1" => {
+            Some(ImageFormat::Heic)
+        }
         b"avif" | b"avis" => Some(ImageFormat::Avif),
         _ => None,
     }
@@ -37,10 +40,13 @@ pub fn parse_heif(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
         return Ok(ParseOutcome::Rejected("unsupported ftyp brand".into()));
     };
     if !(16..=4096).contains(&ftyp_size) || ftyp_size % 4 != 0 {
-        return Ok(ParseOutcome::Rejected(format!("implausible ftyp size {ftyp_size}")));
+        return Ok(ParseOutcome::Rejected(format!(
+            "implausible ftyp size {ftyp_size}"
+        )));
     }
     let mut cand = ParsedCandidate::new(format, start);
-    cand.diagnostics.push(format!("major brand {}", String::from_utf8_lossy(&t[4..8])));
+    cand.diagnostics
+        .push(format!("major brand {}", String::from_utf8_lossy(&t[4..8])));
     c.seek(start);
 
     let mut have_meta = false;
@@ -67,7 +73,10 @@ pub fn parse_heif(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
         }
         let size = match size32 {
             0 => {
-                cand.diagnostics.push(format!("box '{}' extends to end of file; cannot bound", String::from_utf8_lossy(&ty)));
+                cand.diagnostics.push(format!(
+                    "box '{}' extends to end of file; cannot bound",
+                    String::from_utf8_lossy(&ty)
+                ));
                 break;
             }
             1 => match c.read_u64_be()? {
@@ -81,7 +90,14 @@ pub fn parse_heif(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
             break;
         }
         if pos + size > limit {
-            return Ok(finish(cand, end, pos + size, EndStatus::Truncated, "box exceeds maximum candidate length".into(), have_meta));
+            return Ok(finish(
+                cand,
+                end,
+                pos + size,
+                EndStatus::Truncated,
+                "box exceeds maximum candidate length".into(),
+                have_meta,
+            ));
         }
         if &ty == b"meta" {
             if size - hdr > limits.max_meta_box {
@@ -89,18 +105,37 @@ pub fn parse_heif(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
             }
             let payload = match read_vec_at(src, pos + hdr, (size - hdr) as usize) {
                 Ok(p) => p,
-                Err(_) => return Ok(finish(cand, end, pos + size, EndStatus::Truncated, "source ended inside meta".into(), have_meta)),
+                Err(_) => {
+                    return Ok(finish(
+                        cand,
+                        end,
+                        pos + size,
+                        EndStatus::Truncated,
+                        "source ended inside meta".into(),
+                        have_meta,
+                    ))
+                }
             };
             let mut info = MetaInfo::default();
             if payload.len() < 4 || parse_children(&payload[4..], &mut info, 0).is_err() {
-                return Ok(finish(cand, end, pos + size, EndStatus::Corrupt, "malformed meta box".into(), have_meta));
+                return Ok(finish(
+                    cand,
+                    end,
+                    pos + size,
+                    EndStatus::Corrupt,
+                    "malformed meta box".into(),
+                    have_meta,
+                ));
             }
             if let Some((w, h)) = info.largest_ispe {
                 cand.width = Some(w);
                 cand.height = Some(h);
             }
             max_extent = info.max_extent;
-            cand.diagnostics.push(format!("meta: {} item extents, {} ispe", info.extents, info.ispe_count));
+            cand.diagnostics.push(format!(
+                "meta: {} item extents, {} ispe",
+                info.extents, info.ispe_count
+            ));
             have_meta = true;
         }
         if &ty == b"mdat" {
@@ -108,7 +143,14 @@ pub fn parse_heif(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
         }
         c.seek(pos + hdr);
         if c.skip(size - hdr) != size - hdr {
-            return Ok(finish(cand, end, pos + size, EndStatus::Truncated, "source ended inside box".into(), have_meta));
+            return Ok(finish(
+                cand,
+                end,
+                pos + size,
+                EndStatus::Truncated,
+                "source ended inside box".into(),
+                have_meta,
+            ));
         }
         end = pos + size;
     }
@@ -119,7 +161,10 @@ pub fn parse_heif(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
     cand.length = end - start;
     if max_extent > cand.length {
         cand.status = EndStatus::Corrupt;
-        cand.end_reason = Some(format!("item data extends to +{max_extent}, beyond carved length {}", cand.length));
+        cand.end_reason = Some(format!(
+            "item data extends to +{max_extent}, beyond carved length {}",
+            cand.length
+        ));
     } else if !have_mdat && max_extent == 0 {
         cand.status = EndStatus::Corrupt;
         cand.end_reason = Some("no mdat and no item extents".into());
@@ -129,7 +174,14 @@ pub fn parse_heif(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
     Ok(ParseOutcome::Candidate(cand))
 }
 
-fn finish(mut cand: ParsedCandidate, good_end: u64, _wanted: u64, status: EndStatus, why: String, have_meta: bool) -> ParseOutcome {
+fn finish(
+    mut cand: ParsedCandidate,
+    good_end: u64,
+    _wanted: u64,
+    status: EndStatus,
+    why: String,
+    have_meta: bool,
+) -> ParseOutcome {
     if !have_meta {
         return ParseOutcome::Rejected(format!("no meta before break: {why}"));
     }
@@ -172,7 +224,10 @@ fn parse_children(mut p: &[u8], info: &mut MetaInfo, depth: u32) -> Result<(), (
                 let w = be(&body[4..], 4).ok_or(())? as u32;
                 let h = be(&body[8..], 4).ok_or(())? as u32;
                 info.ispe_count += 1;
-                if info.largest_ispe.is_none_or(|(a, b)| (w as u64 * h as u64) > (a as u64 * b as u64)) {
+                if info
+                    .largest_ispe
+                    .is_none_or(|(a, b)| (w as u64 * h as u64) > (a as u64 * b as u64))
+                {
                     info.largest_ispe = Some((w, h));
                 }
             }
@@ -190,7 +245,8 @@ fn parse_iloc(b: &[u8], info: &mut MetaInfo) -> Result<(), ()> {
     let s1 = *b.get(i).ok_or(())?;
     let s2 = *b.get(i + 1).ok_or(())?;
     i += 2;
-    let (off_size, len_size, base_size) = ((s1 >> 4) as usize, (s1 & 15) as usize, (s2 >> 4) as usize);
+    let (off_size, len_size, base_size) =
+        ((s1 >> 4) as usize, (s1 & 15) as usize, (s2 >> 4) as usize);
     let idx_size = if version >= 1 { (s2 & 15) as usize } else { 0 };
     let count = if version < 2 {
         let v = be(&b[i..], 2).ok_or(())?;
@@ -209,19 +265,33 @@ fn parse_iloc(b: &[u8], info: &mut MetaInfo) -> Result<(), ()> {
             i += 2;
         }
         i += 2; // data_reference_index
-        let base = if base_size > 0 { be(b.get(i..).ok_or(())?, base_size).ok_or(())? } else { 0 };
+        let base = if base_size > 0 {
+            be(b.get(i..).ok_or(())?, base_size).ok_or(())?
+        } else {
+            0
+        };
         i += base_size;
         let n = be(b.get(i..).ok_or(())?, 2).ok_or(())?;
         i += 2;
         for _ in 0..n {
             i += idx_size;
-            let off = if off_size > 0 { be(b.get(i..).ok_or(())?, off_size).ok_or(())? } else { 0 };
+            let off = if off_size > 0 {
+                be(b.get(i..).ok_or(())?, off_size).ok_or(())?
+            } else {
+                0
+            };
             i += off_size;
-            let len = if len_size > 0 { be(b.get(i..).ok_or(())?, len_size).ok_or(())? } else { 0 };
+            let len = if len_size > 0 {
+                be(b.get(i..).ok_or(())?, len_size).ok_or(())?
+            } else {
+                0
+            };
             i += len_size;
             info.extents += 1;
             if method == 0 {
-                info.max_extent = info.max_extent.max(base.saturating_add(off).saturating_add(len));
+                info.max_extent = info
+                    .max_extent
+                    .max(base.saturating_add(off).saturating_add(len));
             }
         }
     }

@@ -34,7 +34,12 @@ pub fn partial_trailer(c: &ParsedCandidate) -> &'static [u8] {
 /// Copy `[offset, offset+length)` of `src` to a new file at `dest`.
 /// Refuses to overwrite an existing file unless `overwrite` is set (used
 /// when resuming a job that may have partially exported this candidate).
-pub fn export_candidate(src: &dyn ReadAt, c: &ParsedCandidate, dest: &Path, overwrite: bool) -> io::Result<ExportInfo> {
+pub fn export_candidate(
+    src: &dyn ReadAt,
+    c: &ParsedCandidate,
+    dest: &Path,
+    overwrite: bool,
+) -> io::Result<ExportInfo> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -54,7 +59,10 @@ pub fn export_candidate(src: &dyn ReadAt, c: &ParsedCandidate, dest: &Path, over
         let want = ((c.length - done) as usize).min(buf.len());
         let n = read_full_at(src, c.offset + done, &mut buf[..want])?;
         if n == 0 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "source shorter than candidate"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "source shorter than candidate",
+            ));
         }
         out.write_all(&buf[..n])?;
         file_hash.update(&buf[..n]);

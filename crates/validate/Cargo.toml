@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 pr-model.workspace = true
+pr-carve.workspace = true
 image.workspace = true
 kamadak-exif.workspace = true
 sha2.workspace = true

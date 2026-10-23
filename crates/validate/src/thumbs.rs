@@ -45,13 +45,21 @@ pub fn match_thumbnails(results: &mut [RecoveryResult]) -> usize {
     }
     let mut links = Vec::new();
     for &t in &thumbs {
-        let Some(th) = results[t].perceptual_hash.as_deref().and_then(parse_hash) else { continue };
-        let Some(ta) = aspect(&results[t]) else { continue };
+        let Some(th) = results[t].perceptual_hash.as_deref().and_then(parse_hash) else {
+            continue;
+        };
+        let Some(ta) = aspect(&results[t]) else {
+            continue;
+        };
         let tdate = results[t].metadata.get("exif_datetime_original").cloned();
         let mut best: Option<(u32, usize, bool)> = None;
         for &o in &originals {
-            let Some(oh) = results[o].perceptual_hash.as_deref().and_then(parse_hash) else { continue };
-            let Some(oa) = aspect(&results[o]) else { continue };
+            let Some(oh) = results[o].perceptual_hash.as_deref().and_then(parse_hash) else {
+                continue;
+            };
+            let Some(oa) = aspect(&results[o]) else {
+                continue;
+            };
             // Thumbnails must be smaller; never treat a larger image as a thumbnail.
             if results[o].width <= results[t].width {
                 continue;
@@ -63,22 +71,33 @@ pub fn match_thumbnails(results: &mut [RecoveryResult]) -> usize {
             if d > THUMB_MAX_DISTANCE {
                 continue;
             }
-            let same_date = tdate.is_some() && tdate == results[o].metadata.get("exif_datetime_original").cloned();
+            let same_date = tdate.is_some()
+                && tdate == results[o].metadata.get("exif_datetime_original").cloned();
             let better = match best {
                 None => true,
-                Some((bd, _, bdate)) => (same_date, std::cmp::Reverse(d)) > (bdate, std::cmp::Reverse(bd)),
+                Some((bd, _, bdate)) => {
+                    (same_date, std::cmp::Reverse(d)) > (bdate, std::cmp::Reverse(bd))
+                }
             };
             if better {
                 best = Some((d, o, same_date));
             }
         }
         if let Some((d, o, same_date)) = best {
-            if results[t].associations.iter().any(|a| a.relation == Relation::EmbeddedIn && a.result_id == results[o].id) {
+            if results[t]
+                .associations
+                .iter()
+                .any(|a| a.relation == Relation::EmbeddedIn && a.result_id == results[o].id)
+            {
                 continue;
             }
             let basis = format!(
                 "dHash distance {d}, aspect ratio match{}",
-                if same_date { ", same EXIF DateTimeOriginal" } else { "" }
+                if same_date {
+                    ", same EXIF DateTimeOriginal"
+                } else {
+                    ""
+                }
             );
             links.push((t, o, basis));
         }
@@ -131,7 +150,10 @@ mod tests {
     fn thumbnail_only_scenario_has_no_false_link() {
         let o = images::jpeg(640, 480, 31, &JpegOpts::default());
         let t = images::embedded_thumbnail(640, 480, 32);
-        let mut v = vec![res(&o, Classification::CarvedImage), res(&t, Classification::Thumbnail)];
+        let mut v = vec![
+            res(&o, Classification::CarvedImage),
+            res(&t, Classification::Thumbnail),
+        ];
         assert_eq!(match_thumbnails(&mut v), 0);
     }
 }

@@ -6,7 +6,7 @@ members = [
     "crates/validate",
     "crates/fs",
     "crates/adb",
-    # "crates/worker",
+    "crates/worker",
     "crates/testkit",
 ]
 

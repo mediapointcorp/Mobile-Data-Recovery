@@ -39,10 +39,13 @@ impl FatGeometry {
         self.bytes_per_sector as u64 * self.sectors_per_cluster as u64
     }
     fn root_dir_offset(&self) -> u64 {
-        (self.reserved_sectors + self.num_fats * self.fat_sectors) as u64 * self.bytes_per_sector as u64
+        (self.reserved_sectors + self.num_fats * self.fat_sectors) as u64
+            * self.bytes_per_sector as u64
     }
     fn data_offset(&self) -> u64 {
-        self.root_dir_offset() + (self.root_entries as u64 * 32).div_ceil(self.bytes_per_sector as u64) * self.bytes_per_sector as u64
+        self.root_dir_offset()
+            + (self.root_entries as u64 * 32).div_ceil(self.bytes_per_sector as u64)
+                * self.bytes_per_sector as u64
     }
     pub fn cluster_offset(&self, c: u32) -> u64 {
         self.data_offset() + (c as u64 - 2) * self.cluster_size()
@@ -122,9 +125,23 @@ impl<'a> FatVolume<'a> {
         let reserved = le16(&bs, 14) as u32;
         let nfats = bs[16] as u32;
         let root_entries = le16(&bs, 17) as u32;
-        let total = if le16(&bs, 19) != 0 { le16(&bs, 19) as u32 } else { le32(&bs, 32) };
-        let fat_sectors = if le16(&bs, 22) != 0 { le16(&bs, 22) as u32 } else { le32(&bs, 36) };
-        if !matches!(bps, 512 | 1024 | 2048 | 4096) || spc == 0 || !spc.is_power_of_two() || nfats == 0 || reserved == 0 || fat_sectors == 0 {
+        let total = if le16(&bs, 19) != 0 {
+            le16(&bs, 19) as u32
+        } else {
+            le32(&bs, 32)
+        };
+        let fat_sectors = if le16(&bs, 22) != 0 {
+            le16(&bs, 22) as u32
+        } else {
+            le32(&bs, 36)
+        };
+        if !matches!(bps, 512 | 1024 | 2048 | 4096)
+            || spc == 0
+            || !spc.is_power_of_two()
+            || nfats == 0
+            || reserved == 0
+            || fat_sectors == 0
+        {
             return Err(FsError::Unsupported("not a FAT boot sector".into()));
         }
         let root_secs = (root_entries * 32).div_ceil(bps);
@@ -147,24 +164,41 @@ impl<'a> FatVolume<'a> {
             num_fats: nfats,
             fat_sectors,
             root_entries,
-            root_cluster: if fat_type == FatType::Fat32 { le32(&bs, 44) } else { 0 },
+            root_cluster: if fat_type == FatType::Fat32 {
+                le32(&bs, 44)
+            } else {
+                0
+            },
             total_sectors: total,
             cluster_count: clusters,
         };
         let fat_bytes = fat_sectors as u64 * bps as u64;
         if fat_bytes > MAX_FAT_BYTES {
-            return Err(FsError::Unsupported(format!("FAT of {fat_bytes} bytes exceeds limit")));
+            return Err(FsError::Unsupported(format!(
+                "FAT of {fat_bytes} bytes exceeds limit"
+            )));
         }
         let raw = read_vec_at(src, reserved as u64 * bps as u64, fat_bytes as usize)?;
         let n = clusters as usize + 2;
         let fat: Vec<u32> = match fat_type {
-            FatType::Fat32 => (0..n).map(|i| raw.get(i * 4..i * 4 + 4).map_or(0, |b| le32(b, 0) & 0x0FFF_FFFF)).collect(),
-            FatType::Fat16 => (0..n).map(|i| raw.get(i * 2..i * 2 + 2).map_or(0, |b| le16(b, 0) as u32)).collect(),
+            FatType::Fat32 => (0..n)
+                .map(|i| {
+                    raw.get(i * 4..i * 4 + 4)
+                        .map_or(0, |b| le32(b, 0) & 0x0FFF_FFFF)
+                })
+                .collect(),
+            FatType::Fat16 => (0..n)
+                .map(|i| raw.get(i * 2..i * 2 + 2).map_or(0, |b| le16(b, 0) as u32))
+                .collect(),
             FatType::Fat12 => (0..n)
                 .map(|i| {
                     let o = i + i / 2;
                     let v = raw.get(o..o + 2).map_or(0, |b| le16(b, 0)) as u32;
-                    if i & 1 == 0 { v & 0xFFF } else { v >> 4 }
+                    if i & 1 == 0 {
+                        v & 0xFFF
+                    } else {
+                        v >> 4
+                    }
                 })
                 .collect(),
         };
@@ -208,7 +242,9 @@ impl<'a> FatVolume<'a> {
         let clusters = if deleted {
             // Chain is gone: read up to 64 contiguous clusters; parsing stops
             // at the first never-used entry.
-            (first_cluster..first_cluster.saturating_add(64)).take_while(|c| self.geo.valid_cluster(*c)).collect()
+            (first_cluster..first_cluster.saturating_add(64))
+                .take_while(|c| self.geo.valid_cluster(*c))
+                .collect()
         } else {
             self.chain(first_cluster, 1 << 16)
         };
@@ -230,18 +266,37 @@ impl<'a> FatVolume<'a> {
     /// directories whose first cluster still holds a directory).
     pub fn walk(&self) -> Vec<FatEntry> {
         let mut out = Vec::new();
-        let root = if self.geo.fat_type == FatType::Fat32 { self.geo.root_cluster } else { 0 };
+        let root = if self.geo.fat_type == FatType::Fat32 {
+            self.geo.root_cluster
+        } else {
+            0
+        };
         let mut visited = HashSet::new();
         self.walk_dir(root, "", false, 0, &mut visited, &mut out);
         out
     }
 
-    fn walk_dir(&self, cluster: u32, prefix: &str, deleted_dir: bool, depth: usize, visited: &mut HashSet<u32>, out: &mut Vec<FatEntry>) {
-        if depth > MAX_DEPTH || out.len() >= MAX_ENTRIES || (cluster != 0 && !visited.insert(cluster)) {
+    fn walk_dir(
+        &self,
+        cluster: u32,
+        prefix: &str,
+        deleted_dir: bool,
+        depth: usize,
+        visited: &mut HashSet<u32>,
+        out: &mut Vec<FatEntry>,
+    ) {
+        if depth > MAX_DEPTH
+            || out.len() >= MAX_ENTRIES
+            || (cluster != 0 && !visited.insert(cluster))
+        {
             return;
         }
         let bytes = self.dir_bytes(cluster, deleted_dir);
-        let base = if cluster == 0 { self.geo.root_dir_offset() } else { self.geo.cluster_offset(cluster) };
+        let base = if cluster == 0 {
+            self.geo.root_dir_offset()
+        } else {
+            self.geo.cluster_offset(cluster)
+        };
         let mut lfn: Vec<(u8, Vec<u16>)> = Vec::new();
         let mut subdirs = Vec::new();
         for (i, e) in bytes.chunks_exact(32).enumerate() {
@@ -265,7 +320,11 @@ impl<'a> FatVolume<'a> {
             if e[0] == b'.' {
                 continue;
             }
-            let cluster_hi = if self.geo.fat_type == FatType::Fat32 { le16(e, 20) as u32 } else { 0 };
+            let cluster_hi = if self.geo.fat_type == FatType::Fat32 {
+                le16(e, 20) as u32
+            } else {
+                0
+            };
             let first = (cluster_hi << 16) | le16(e, 26) as u32;
             let size = le32(e, 28);
             let is_dir = attr & 0x10 != 0;
@@ -276,7 +335,12 @@ impl<'a> FatVolume<'a> {
                     if pending_lfn.iter().any(|(s, _)| *s != sum) {
                         return None;
                     }
-                    let units: Vec<u16> = pending_lfn.iter().rev().flat_map(|(_, u)| u.iter().copied()).take_while(|&u| u != 0 && u != 0xFFFF).collect();
+                    let units: Vec<u16> = pending_lfn
+                        .iter()
+                        .rev()
+                        .flat_map(|(_, u)| u.iter().copied())
+                        .take_while(|&u| u != 0 && u != 0xFFFF)
+                        .collect();
                     let s = String::from_utf16_lossy(&units);
                     (!s.is_empty()).then_some(s)
                 })
@@ -288,7 +352,11 @@ impl<'a> FatVolume<'a> {
                 }
                 let base = String::from_utf8_lossy(&n).trim_end().to_string();
                 let ext = String::from_utf8_lossy(&e[8..11]).trim_end().to_string();
-                if ext.is_empty() { base } else { format!("{base}.{ext}") }
+                if ext.is_empty() {
+                    base
+                } else {
+                    format!("{base}.{ext}")
+                }
             };
             let name_reconstructed = deleted && long.is_none();
             let name = long.unwrap_or(short);
@@ -344,16 +412,22 @@ impl<'a> FatVolume<'a> {
             return plan;
         }
         let clusters: Vec<u32> = if e.deleted {
-            if self.geo.fat_type == FatType::Fat32 && e.first_cluster < 65536 && self.geo.cluster_count > 65536 {
+            if self.geo.fat_type == FatType::Fat32
+                && e.first_cluster < 65536
+                && self.geo.cluster_count > 65536
+            {
                 plan.notes.push("start cluster < 65536 on a large FAT32 volume: some systems zero the high word on delete, so the start cluster may be wrong".into());
             }
             plan.notes.push("cluster chain was freed on deletion; contiguous allocation from the recorded start cluster is assumed".into());
-            (e.first_cluster..e.first_cluster.saturating_add(needed)).take_while(|c| self.geo.valid_cluster(*c)).collect()
+            (e.first_cluster..e.first_cluster.saturating_add(needed))
+                .take_while(|c| self.geo.valid_cluster(*c))
+                .collect()
         } else {
             self.chain(e.first_cluster, needed as usize + 1)
         };
         if e.deleted {
-            plan.clusters_now_allocated = clusters.iter().filter(|&&c| self.is_allocated(c)).count() as u32;
+            plan.clusters_now_allocated =
+                clusters.iter().filter(|&&c| self.is_allocated(c)).count() as u32;
             if plan.clusters_now_allocated > 0 {
                 plan.notes.push(format!(
                     "{} of {} assumed clusters are now allocated to other data — content is likely overwritten",
@@ -361,7 +435,8 @@ impl<'a> FatVolume<'a> {
                 ));
             }
         } else if clusters.len() < needed as usize {
-            plan.notes.push("cluster chain shorter than file size".into());
+            plan.notes
+                .push("cluster chain shorter than file size".into());
         }
         let mut remaining = e.size as u64;
         for c in clusters {
@@ -377,7 +452,8 @@ impl<'a> FatVolume<'a> {
             remaining -= take;
         }
         if remaining > 0 {
-            plan.notes.push(format!("{remaining} bytes beyond the end of the volume"));
+            plan.notes
+                .push(format!("{remaining} bytes beyond the end of the volume"));
         }
         plan
     }
@@ -386,7 +462,9 @@ impl<'a> FatVolume<'a> {
     pub fn read(&self, plan: &ReadPlan, max_bytes: u64) -> std::io::Result<Vec<u8>> {
         let total: u64 = plan.ranges.iter().map(|r| r.1).sum();
         if total > max_bytes {
-            return Err(std::io::Error::other(format!("file of {total} bytes exceeds limit {max_bytes}")));
+            return Err(std::io::Error::other(format!(
+                "file of {total} bytes exceeds limit {max_bytes}"
+            )));
         }
         let mut out = Vec::with_capacity(total as usize);
         for &(off, len) in &plan.ranges {
@@ -415,18 +493,32 @@ mod tests {
         b.add_file("DCIM/Camera/IMG_20240501_120000.jpg", &keep);
         b.add_file("DCIM/Camera/IMG_20240501_120100.jpg", &gone);
         let f_over = b.add_file("DCIM/Camera/IMG_20240501_120200.jpg", &over);
-        b.add_interleaved("DCIM/Camera/IMG_20240501_120300.jpg", &frag, "DCIM/Camera/note.txt", &[b'x'; 3000]);
+        b.add_interleaved(
+            "DCIM/Camera/IMG_20240501_120300.jpg",
+            &frag,
+            "DCIM/Camera/note.txt",
+            &[b'x'; 3000],
+        );
         b.delete("DCIM/Camera/IMG_20240501_120100.jpg");
         b.delete("DCIM/Camera/IMG_20240501_120200.jpg");
         b.delete("DCIM/Camera/IMG_20240501_120300.jpg");
         // Reuse the clusters of the deleted "over" file.
-        b.add_file_clusters("DCIM/Camera/new.bin", &vec![0xAB; over.len()], f_over.clusters.clone());
+        b.add_file_clusters(
+            "DCIM/Camera/new.bin",
+            &vec![0xAB; over.len()],
+            f_over.clusters.clone(),
+        );
         let img = b.finish();
         let src = MemSource::new(img);
         let v = FatVolume::open(&src).unwrap();
         assert_eq!(v.geo.fat_type, FatType::Fat32);
         let entries = v.walk();
-        let find = |p: &str| entries.iter().find(|e| e.path == p).unwrap_or_else(|| panic!("{p} in {entries:#?}"));
+        let find = |p: &str| {
+            entries
+                .iter()
+                .find(|e| e.path == p)
+                .unwrap_or_else(|| panic!("{p} in {entries:#?}"))
+        };
 
         let live = find("/DCIM/Camera/IMG_20240501_120000.jpg");
         assert!(!live.deleted);
@@ -450,7 +542,10 @@ mod tests {
         // Deleted fragmented: contiguous assumption yields wrong data.
         let f = find("/DCIM/Camera/IMG_20240501_120300.jpg");
         let p = v.plan(f);
-        assert!(p.clusters_now_allocated > 0, "foreign clusters inside assumed range are allocated");
+        assert!(
+            p.clusters_now_allocated > 0,
+            "foreign clusters inside assumed range are allocated"
+        );
         assert_ne!(v.read(&p, u64::MAX).unwrap(), frag);
     }
 

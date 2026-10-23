@@ -171,7 +171,12 @@ impl FatBuilder {
         // "." and ".."
         let off = self.cluster_offset(clusters[0]);
         let dot = short_entry(b".          ", 0x10, clusters[0], 0);
-        let dotdot = short_entry(b"..         ", 0x10, if parent.is_empty() { 0 } else { parent_cluster }, 0);
+        let dotdot = short_entry(
+            b"..         ",
+            0x10,
+            if parent.is_empty() { 0 } else { parent_cluster },
+            0,
+        );
         self.img[off..off + 32].copy_from_slice(&dot);
         self.img[off + 32..off + 64].copy_from_slice(&dotdot);
         self.add_entry(&parent, &name, 0x10, clusters[0], 0);
@@ -202,7 +207,14 @@ impl FatBuilder {
     }
 
     /// Write directory entries (LFN + short) and return their image offsets.
-    fn add_entry(&mut self, dir: &str, name: &str, attr: u8, cluster: u32, size: u32) -> Vec<usize> {
+    fn add_entry(
+        &mut self,
+        dir: &str,
+        name: &str,
+        attr: u8,
+        cluster: u32,
+        size: u32,
+    ) -> Vec<usize> {
         let short = short_name(name, self.files.len() + self.dirs.len());
         let lfn = lfn_entries(name, &short);
         let slots = self.free_dir_slots(dir, lfn.len() + 1);
@@ -222,7 +234,8 @@ impl FatBuilder {
         self.chain(&clusters);
         self.write_data(&clusters, data);
         let slots = self.add_entry(&dir, &name, 0x20, clusters[0], data.len() as u32);
-        self.files.insert(path.to_string(), (slots, clusters.clone()));
+        self.files
+            .insert(path.to_string(), (slots, clusters.clone()));
         FatFile {
             path: path.to_string(),
             clusters,
@@ -241,7 +254,13 @@ impl FatBuilder {
     }
 
     /// Write `a` in two fragments with all of `b` in between.
-    pub fn add_interleaved(&mut self, a_path: &str, a: &[u8], b_path: &str, b: &[u8]) -> (FatFile, FatFile) {
+    pub fn add_interleaved(
+        &mut self,
+        a_path: &str,
+        a: &[u8],
+        b_path: &str,
+        b: &[u8],
+    ) -> (FatFile, FatFile) {
         let na = self.clusters_for(a.len());
         let first = self.alloc_contiguous(na / 2);
         let nb = self.clusters_for(b.len());
@@ -302,7 +321,11 @@ fn short_name(name: &str, uniq: usize) -> [u8; 11] {
         Some(i) => (&upper[..i], &upper[i + 1..]),
         None => (upper.as_str(), ""),
     };
-    let clean = |s: &str| s.bytes().filter(|b| b.is_ascii_alphanumeric()).collect::<Vec<u8>>();
+    let clean = |s: &str| {
+        s.bytes()
+            .filter(|b| b.is_ascii_alphanumeric())
+            .collect::<Vec<u8>>()
+    };
     let b = clean(base);
     let tail = format!("~{}", uniq % 1000);
     let keep = 8 - tail.len();
@@ -319,13 +342,15 @@ fn short_name(name: &str, uniq: usize) -> [u8; 11] {
 }
 
 fn lfn_checksum(short: &[u8; 11]) -> u8 {
-    short.iter().fold(0u8, |s, &c| s.rotate_right(1).wrapping_add(c))
+    short
+        .iter()
+        .fold(0u8, |s, &c| s.rotate_right(1).wrapping_add(c))
 }
 
 fn lfn_entries(name: &str, short: &[u8; 11]) -> Vec<[u8; 32]> {
     let mut units: Vec<u16> = name.encode_utf16().collect();
     units.push(0);
-    while units.len() % 13 != 0 {
+    while !units.len().is_multiple_of(13) {
         units.push(0xFFFF);
     }
     let n = units.len() / 13;

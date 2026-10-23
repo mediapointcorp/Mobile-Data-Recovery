@@ -4,7 +4,9 @@ use pr_model::model::{Classification, ImageFormat};
 use serde::{Deserialize, Serialize};
 
 /// File-name extensions searched on the device (case-insensitive).
-pub const IMAGE_EXTENSIONS: [&str; 11] = ["jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "bmp", "dng", "jfif"];
+pub const IMAGE_EXTENSIONS: [&str; 11] = [
+    "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "bmp", "dng", "jfif",
+];
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -29,7 +31,9 @@ pub enum DeviceFileKind {
 impl DeviceFileKind {
     pub fn classification(self) -> Classification {
         match self {
-            DeviceFileKind::ThumbnailCache | DeviceFileKind::ThumbnailContainer => Classification::Thumbnail,
+            DeviceFileKind::ThumbnailCache | DeviceFileKind::ThumbnailContainer => {
+                Classification::Thumbnail
+            }
             _ => Classification::ExistingOriginal,
         }
     }
@@ -80,10 +84,19 @@ pub fn classify(path: &str) -> DeviceFileKind {
     if has("screenshot") {
         return DeviceFileKind::Screenshot;
     }
-    if lower.contains("/dcim/camera/") || lower.contains("/dcim/100andro/") || lower.contains("/dcim/") && !has("cache") {
+    if lower.contains("/dcim/camera/")
+        || lower.contains("/dcim/100andro/")
+        || lower.contains("/dcim/") && !has("cache")
+    {
         return DeviceFileKind::CameraOriginal;
     }
-    if lower.contains("/android/media/") || has("whatsapp") || has("telegram") || has("instagram") || has("snapchat") || has("messenger") {
+    if lower.contains("/android/media/")
+        || has("whatsapp")
+        || has("telegram")
+        || has("instagram")
+        || has("snapchat")
+        || has("messenger")
+    {
         return DeviceFileKind::AppMedia;
     }
     if has("download") {
@@ -118,17 +131,46 @@ mod tests {
 
     #[test]
     fn classification() {
-        assert_eq!(classify("/sdcard/DCIM/Camera/IMG_20240101_1.jpg"), DeviceFileKind::CameraOriginal);
-        assert_eq!(classify("/sdcard/DCIM/Camera/.trashed-1712345678-IMG_1.jpg"), DeviceFileKind::MediaStoreTrash);
-        assert_eq!(classify("/sdcard/DCIM/.thumbnails/1234.jpg"), DeviceFileKind::ThumbnailCache);
-        assert_eq!(classify("/sdcard/DCIM/.thumbnails/.thumbdata4--1967290299"), DeviceFileKind::ThumbnailContainer);
-        assert_eq!(classify("/sdcard/Pictures/Screenshots/Screenshot_1.png"), DeviceFileKind::Screenshot);
-        assert_eq!(classify("/sdcard/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Images/IMG-1.jpg"), DeviceFileKind::AppMedia);
-        assert_eq!(classify("/sdcard/.RecycleBin/x.jpg"), DeviceFileKind::RecycleBinHeuristic);
-        assert_eq!(classify("/sdcard/Download/x.webp"), DeviceFileKind::Download);
-        assert_eq!(DeviceFileKind::ThumbnailCache.classification(), Classification::Thumbnail);
+        assert_eq!(
+            classify("/sdcard/DCIM/Camera/IMG_20240101_1.jpg"),
+            DeviceFileKind::CameraOriginal
+        );
+        assert_eq!(
+            classify("/sdcard/DCIM/Camera/.trashed-1712345678-IMG_1.jpg"),
+            DeviceFileKind::MediaStoreTrash
+        );
+        assert_eq!(
+            classify("/sdcard/DCIM/.thumbnails/1234.jpg"),
+            DeviceFileKind::ThumbnailCache
+        );
+        assert_eq!(
+            classify("/sdcard/DCIM/.thumbnails/.thumbdata4--1967290299"),
+            DeviceFileKind::ThumbnailContainer
+        );
+        assert_eq!(
+            classify("/sdcard/Pictures/Screenshots/Screenshot_1.png"),
+            DeviceFileKind::Screenshot
+        );
+        assert_eq!(
+            classify("/sdcard/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Images/IMG-1.jpg"),
+            DeviceFileKind::AppMedia
+        );
+        assert_eq!(
+            classify("/sdcard/.RecycleBin/x.jpg"),
+            DeviceFileKind::RecycleBinHeuristic
+        );
+        assert_eq!(
+            classify("/sdcard/Download/x.webp"),
+            DeviceFileKind::Download
+        );
+        assert_eq!(
+            DeviceFileKind::ThumbnailCache.classification(),
+            Classification::Thumbnail
+        );
         assert!(is_candidate("/sdcard/a/B.JPEG"));
-        assert!(is_candidate("/sdcard/DCIM/.thumbnails/.thumbdata3--1967290299"));
+        assert!(is_candidate(
+            "/sdcard/DCIM/.thumbnails/.thumbdata3--1967290299"
+        ));
         assert!(!is_candidate("/sdcard/a/notes.txt"));
     }
 }

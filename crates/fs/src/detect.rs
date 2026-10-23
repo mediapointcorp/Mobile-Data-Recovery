@@ -56,7 +56,9 @@ pub struct VolumeReport {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum PartitionScheme {
-    Gpt { sector_size: u32 },
+    Gpt {
+        sector_size: u32,
+    },
     Mbr,
     /// The image is a single volume (no partition table).
     None,
@@ -106,12 +108,26 @@ fn boot_sector_kind(bs: &[u8]) -> Option<VolumeKind> {
     let reserved = le16(bs, 14);
     let nfats = bs[16];
     let jump_ok = bs[0] == 0xEB || bs[0] == 0xE9;
-    if !jump_ok || !matches!(bps, 512 | 1024 | 2048 | 4096) || spc == 0 || !spc.is_power_of_two() || reserved == 0 || nfats == 0 {
+    if !jump_ok
+        || !matches!(bps, 512 | 1024 | 2048 | 4096)
+        || spc == 0
+        || !spc.is_power_of_two()
+        || reserved == 0
+        || nfats == 0
+    {
         return None;
     }
     let root_entries = le16(bs, 17) as u32;
-    let total = if le16(bs, 19) != 0 { le16(bs, 19) as u32 } else { le32(bs, 32) };
-    let fat_sz = if le16(bs, 22) != 0 { le16(bs, 22) as u32 } else { le32(bs, 36) };
+    let total = if le16(bs, 19) != 0 {
+        le16(bs, 19) as u32
+    } else {
+        le32(bs, 32)
+    };
+    let fat_sz = if le16(bs, 22) != 0 {
+        le16(bs, 22) as u32
+    } else {
+        le32(bs, 36)
+    };
     let root_secs = (root_entries * 32).div_ceil(bps as u32);
     let data = total.checked_sub(reserved as u32 + nfats as u32 * fat_sz + root_secs)?;
     let clusters = data / spc as u32;
@@ -125,7 +141,12 @@ fn boot_sector_kind(bs: &[u8]) -> Option<VolumeKind> {
 }
 
 /// Identify a single volume starting at `off`.
-pub fn identify_volume(src: &dyn ReadAt, off: u64, length: u64, name: Option<String>) -> VolumeReport {
+pub fn identify_volume(
+    src: &dyn ReadAt,
+    off: u64,
+    length: u64,
+    name: Option<String>,
+) -> VolumeReport {
     let head = read(src, off, 4096);
     let mut v = VolumeReport {
         offset: off,
@@ -153,7 +174,11 @@ pub fn identify_volume(src: &dyn ReadAt, off: u64, length: u64, name: Option<Str
         match k {
             VolumeKind::Fat12 | VolumeKind::Fat16 | VolumeKind::Fat32 => {
                 v.support = SupportLevel::DeletedRecordRecovery;
-                let lab = if k == VolumeKind::Fat32 { &head[71..82] } else { &head[43..54] };
+                let lab = if k == VolumeKind::Fat32 {
+                    &head[71..82]
+                } else {
+                    &head[43..54]
+                };
                 let lab = String::from_utf8_lossy(lab).trim().to_string();
                 if !lab.is_empty() && lab != "NO NAME" {
                     v.label = Some(lab);
@@ -166,7 +191,8 @@ pub fn identify_volume(src: &dyn ReadAt, off: u64, length: u64, name: Option<Str
             }
             _ => {
                 v.support = SupportLevel::IdentificationOnly;
-                v.notes.push("NTFS: identified only — covered by raw carving".into());
+                v.notes
+                    .push("NTFS: identified only — covered by raw carving".into());
             }
         }
         return v;
@@ -177,11 +203,17 @@ pub fn identify_volume(src: &dyn ReadAt, off: u64, length: u64, name: Option<Str
         v.support = SupportLevel::IdentificationOnly;
         let incompat = le32(sb, 0x60);
         let log_bs = le32(sb, 0x18);
-        let lab = String::from_utf8_lossy(&sb[0x78..0x88]).trim_matches(char::from(0)).trim().to_string();
+        let lab = String::from_utf8_lossy(&sb[0x78..0x88])
+            .trim_matches(char::from(0))
+            .trim()
+            .to_string();
         if !lab.is_empty() {
             v.label = Some(lab);
         }
-        v.notes.push(format!("ext2/3/4 superblock, block size {} bytes, incompat features 0x{incompat:08X}", 1024u64 << log_bs.min(6)));
+        v.notes.push(format!(
+            "ext2/3/4 superblock, block size {} bytes, incompat features 0x{incompat:08X}",
+            1024u64 << log_bs.min(6)
+        ));
         v.notes.push("ext4 clears extent mappings when files are deleted, so deleted-record recovery is not offered; unallocated space is covered by raw carving".into());
         if incompat & 0x10000 != 0 {
             v.encryption = EncryptionState::FileBasedCapable;
@@ -194,7 +226,11 @@ pub fn identify_volume(src: &dyn ReadAt, off: u64, length: u64, name: Option<Str
         v.kind = VolumeKind::F2fs;
         v.support = SupportLevel::IdentificationOnly;
         let features = le32(sb, 2180);
-        v.notes.push(format!("F2FS superblock v{}.{}, features 0x{features:08X} (best-effort parse)", le16(sb, 4), le16(sb, 6)));
+        v.notes.push(format!(
+            "F2FS superblock v{}.{}, features 0x{features:08X} (best-effort parse)",
+            le16(sb, 4),
+            le16(sb, 6)
+        ));
         v.notes.push("F2FS writes out of place and invalidates node blocks on delete; deleted-record recovery is not offered; covered by raw carving".into());
         if features & 0x1 != 0 {
             v.encryption = EncryptionState::FileBasedCapable;
@@ -206,7 +242,10 @@ pub fn identify_volume(src: &dyn ReadAt, off: u64, length: u64, name: Option<Str
     v
 }
 
-fn parse_gpt(src: &dyn ReadAt) -> Option<(u32, Vec<(u64, u64, String)>)> {
+/// (offset, length, name) of one partition.
+type PartEntry = (u64, u64, String);
+
+fn parse_gpt(src: &dyn ReadAt) -> Option<(u32, Vec<PartEntry>)> {
     for ss in [512u32, 4096] {
         let hdr = read(src, ss as u64, 92);
         if hdr.len() < 92 || &hdr[..8] != b"EFI PART" {
@@ -229,8 +268,16 @@ fn parse_gpt(src: &dyn ReadAt) -> Option<(u32, Vec<(u64, u64, String)>)> {
             if last < first {
                 continue;
             }
-            let name: Vec<u16> = e[56..128].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&u| u != 0).collect();
-            parts.push((first * ss as u64, (last - first + 1) * ss as u64, String::from_utf16_lossy(&name)));
+            let name: Vec<u16> = e[56..128]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .take_while(|&u| u != 0)
+                .collect();
+            parts.push((
+                first * ss as u64,
+                (last - first + 1) * ss as u64,
+                String::from_utf16_lossy(&name),
+            ));
         }
         return Some((ss, parts));
     }
@@ -238,7 +285,11 @@ fn parse_gpt(src: &dyn ReadAt) -> Option<(u32, Vec<(u64, u64, String)>)> {
 }
 
 fn parse_mbr(sector: &[u8]) -> Option<Vec<(u64, u64, u8)>> {
-    if sector.len() < 512 || sector[510] != 0x55 || sector[511] != 0xAA || boot_sector_kind(sector).is_some() {
+    if sector.len() < 512
+        || sector[510] != 0x55
+        || sector[511] != 0xAA
+        || boot_sector_kind(sector).is_some()
+    {
         return None;
     }
     let mut parts = Vec::new();
@@ -278,10 +329,14 @@ fn sample_entropy(src: &dyn ReadAt) -> (f64, f64) {
             hist[x as usize] += 1;
         }
         let total = b.len() as f64;
-        let h: f64 = hist.iter().filter(|&&c| c > 0).map(|&c| {
-            let p = c as f64 / total;
-            -p * p.log2()
-        }).sum();
+        let h: f64 = hist
+            .iter()
+            .filter(|&&c| c > 0)
+            .map(|&c| {
+                let p = c as f64 / total;
+                -p * p.log2()
+            })
+            .sum();
         sum += h;
         if h > 7.9 {
             high += 1;
@@ -309,19 +364,30 @@ pub fn analyze_layout(src: &dyn ReadAt) -> ImageLayout {
     if let Some((ss, parts)) = parse_gpt(src) {
         layout.scheme = PartitionScheme::Gpt { sector_size: ss };
         for (off, len, name) in parts {
-            layout.volumes.push(identify_volume(src, off, len, Some(name)));
+            layout
+                .volumes
+                .push(identify_volume(src, off, len, Some(name)));
         }
     } else if let Some(parts) = parse_mbr(&first) {
         layout.scheme = PartitionScheme::Mbr;
         for (off, len, ty) in parts {
             if ty == 0xEE {
-                layout.notes.push("protective MBR without readable GPT".into());
+                layout
+                    .notes
+                    .push("protective MBR without readable GPT".into());
                 continue;
             }
-            layout.volumes.push(identify_volume(src, off, len, Some(format!("MBR type 0x{ty:02X}"))));
+            layout.volumes.push(identify_volume(
+                src,
+                off,
+                len,
+                Some(format!("MBR type 0x{ty:02X}")),
+            ));
         }
     } else {
-        layout.volumes.push(identify_volume(src, 0, src.len(), None));
+        layout
+            .volumes
+            .push(identify_volume(src, 0, src.len(), None));
     }
     let all_unknown = layout.volumes.iter().all(|v| v.kind == VolumeKind::Unknown);
     if all_unknown && high > 0.9 {
@@ -370,14 +436,20 @@ mod tests {
     fn identifies_f2fs_luks_sparse() {
         let mut d = vec![0u8; 8192];
         d[1024..1028].copy_from_slice(&0xF2F5_2010u32.to_le_bytes());
-        assert_eq!(analyze_layout(&MemSource::new(d)).volumes[0].kind, VolumeKind::F2fs);
+        assert_eq!(
+            analyze_layout(&MemSource::new(d)).volumes[0].kind,
+            VolumeKind::F2fs
+        );
         let mut d = vec![0u8; 8192];
         d[..6].copy_from_slice(b"LUKS\xBA\xBE");
         let l = analyze_layout(&MemSource::new(d));
         assert_eq!(l.volumes[0].encryption, EncryptionState::FullVolume);
         let mut d = vec![0u8; 8192];
         d[..4].copy_from_slice(&0xED26_FF3Au32.to_le_bytes());
-        assert_eq!(analyze_layout(&MemSource::new(d)).volumes[0].kind, VolumeKind::AndroidSparse);
+        assert_eq!(
+            analyze_layout(&MemSource::new(d)).volumes[0].kind,
+            VolumeKind::AndroidSparse
+        );
     }
 
     #[test]
@@ -385,7 +457,10 @@ mod tests {
         let d = Rng::new(9).bytes(4 << 20);
         let l = analyze_layout(&MemSource::new(d));
         assert_eq!(l.volumes[0].kind, VolumeKind::Unknown);
-        assert_eq!(l.volumes[0].encryption, EncryptionState::LikelyEncryptedOrRandom);
+        assert_eq!(
+            l.volumes[0].encryption,
+            EncryptionState::LikelyEncryptedOrRandom
+        );
         assert!(l.sampled_entropy > 7.9);
     }
 

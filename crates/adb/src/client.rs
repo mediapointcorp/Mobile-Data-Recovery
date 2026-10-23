@@ -3,7 +3,9 @@
 use crate::discovery::{is_candidate, IMAGE_EXTENSIONS};
 use crate::parse::{self, ListedDevice, ListedFile};
 use crate::runner::CommandRunner;
-use crate::validate::{local_relative_path, sh_quote, validate_device_path, validate_partition_name, validate_serial};
+use crate::validate::{
+    local_relative_path, sh_quote, validate_device_path, validate_partition_name, validate_serial,
+};
 use crate::AdbError;
 use pr_model::CancelFlag;
 use serde::{Deserialize, Serialize};
@@ -109,17 +111,30 @@ impl AdbClient {
 
     /// `adb shell <cmd>` where `cmd` is built only from fixed templates and
     /// quoted, validated arguments.
-    fn shell(&self, serial: &str, cmd: String, timeout: Duration) -> Result<crate::runner::CmdOutput, AdbError> {
+    fn shell(
+        &self,
+        serial: &str,
+        cmd: String,
+        timeout: Duration,
+    ) -> Result<crate::runner::CmdOutput, AdbError> {
         validate_serial(serial)?;
-        self.runner.run(&[s("-s"), s(serial), s("shell"), cmd], timeout)
+        self.runner
+            .run(&[s("-s"), s(serial), s("shell"), cmd], timeout)
     }
 
     pub fn version(&self) -> Result<String, AdbError> {
-        Ok(self.run_ok(vec![s("version")], SHORT)?.lines().next().unwrap_or("").to_string())
+        Ok(self
+            .run_ok(vec![s("version")], SHORT)?
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string())
     }
 
     pub fn list_devices(&self) -> Result<Vec<ListedDevice>, AdbError> {
-        Ok(parse::parse_devices(&self.run_ok(vec![s("devices"), s("-l")], SHORT)?))
+        Ok(parse::parse_devices(
+            &self.run_ok(vec![s("devices"), s("-l")], SHORT)?,
+        ))
     }
 
     fn require_ready(&self, serial: &str) -> Result<ListedDevice, AdbError> {
@@ -149,10 +164,17 @@ impl AdbClient {
         let get = |k: &str| p.get(k).filter(|v| !v.is_empty()).cloned();
         let brand = get("ro.product.brand");
         let manufacturer = get("ro.product.manufacturer");
-        let is_realme = [&brand, &manufacturer].iter().any(|v| v.as_deref().is_some_and(|x| x.eq_ignore_ascii_case("realme")));
-        let vendor_ui = ["ro.build.version.realmeui", "ro.build.version.oplusrom", "ro.build.version.opporom"]
-            .iter()
-            .find_map(|k| get(k).map(|v| format!("{k}={v}")));
+        let is_realme = [&brand, &manufacturer].iter().any(|v| {
+            v.as_deref()
+                .is_some_and(|x| x.eq_ignore_ascii_case("realme"))
+        });
+        let vendor_ui = [
+            "ro.build.version.realmeui",
+            "ro.build.version.oplusrom",
+            "ro.build.version.opporom",
+        ]
+        .iter()
+        .find_map(|k| get(k).map(|v| format!("{k}={v}")));
         Ok(DeviceInfo {
             serial: dev.serial,
             state: dev.state,
@@ -176,7 +198,10 @@ impl AdbClient {
             .shell(serial, s("command -v su"), SHORT)
             .map(|o| o.code == Some(0) && !o.stdout_text().trim().is_empty())
             .unwrap_or(false);
-        let df = self.shell(serial, s("df -k /sdcard/"), SHORT).ok().and_then(|o| parse::parse_df(&o.stdout_text()));
+        let df = self
+            .shell(serial, s("df -k /sdcard/"), SHORT)
+            .ok()
+            .and_then(|o| parse::parse_df(&o.stdout_text()));
         let volumes = self
             .shell(serial, s("ls -1 /storage"), SHORT)
             .map(|o| parse::parse_storage_volumes(&o.stdout_text()))
@@ -215,18 +240,36 @@ impl AdbClient {
     /// List image files (and thumbnail containers) under the given roots.
     pub fn discover(&self, serial: &str, roots: &[String]) -> Result<DiscoveryResult, AdbError> {
         self.require_ready(serial)?;
-        let mut res = DiscoveryResult { roots: roots.to_vec(), ..Default::default() };
-        let mut name_tests: Vec<String> = IMAGE_EXTENSIONS.iter().map(|e| format!("-iname {}", sh_quote(&format!("*.{e}")))).collect();
+        let mut res = DiscoveryResult {
+            roots: roots.to_vec(),
+            ..Default::default()
+        };
+        let mut name_tests: Vec<String> = IMAGE_EXTENSIONS
+            .iter()
+            .map(|e| format!("-iname {}", sh_quote(&format!("*.{e}"))))
+            .collect();
         name_tests.push(format!("-name {}", sh_quote(".thumbdata*")));
         let expr = name_tests.join(" -o ");
         for root in roots {
             validate_device_path(root)?;
-            let cmd = format!("find {} -type f \\( {expr} \\) -exec stat -c '%s:%Y:%n' {{}} +", sh_quote(root));
+            let cmd = format!(
+                "find {} -type f \\( {expr} \\) -exec stat -c '%s:%Y:%n' {{}} +",
+                sh_quote(root)
+            );
             let out = self.shell(serial, cmd, LISTING)?;
             let (files, other) = parse::parse_stat_lines(&out.stdout_text());
-            res.files.extend(files.into_iter().filter(|f| is_candidate(&f.path) && validate_device_path(&f.path).is_ok()));
+            res.files.extend(
+                files
+                    .into_iter()
+                    .filter(|f| is_candidate(&f.path) && validate_device_path(&f.path).is_ok()),
+            );
             res.inaccessible.extend(other);
-            res.inaccessible.extend(out.stderr.lines().filter(|l| !l.trim().is_empty()).map(|l| l.trim().to_string()));
+            res.inaccessible.extend(
+                out.stderr
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| l.trim().to_string()),
+            );
         }
         res.files.sort_by(|a, b| a.path.cmp(&b.path));
         res.files.dedup_by(|a, b| a.path == b.path);
@@ -235,18 +278,30 @@ impl AdbClient {
 
     pub fn device_sha256(&self, serial: &str, path: &str) -> Option<String> {
         validate_device_path(path).ok()?;
-        let out = self.shell(serial, format!("sha256sum {}", sh_quote(path)), LISTING).ok()?;
-        (out.code == Some(0)).then(|| parse::parse_sha256sum(&out.stdout_text())).flatten()
+        let out = self
+            .shell(serial, format!("sha256sum {}", sh_quote(path)), LISTING)
+            .ok()?;
+        (out.code == Some(0))
+            .then(|| parse::parse_sha256sum(&out.stdout_text()))
+            .flatten()
     }
 
     /// Copy one accessible file to `dest_root/<sanitised device path>`.
     /// The device is only read. Existing local files are never overwritten.
-    pub fn pull(&self, serial: &str, device_path: &str, dest_root: &Path) -> Result<PulledFile, AdbError> {
+    pub fn pull(
+        &self,
+        serial: &str,
+        device_path: &str,
+        dest_root: &Path,
+    ) -> Result<PulledFile, AdbError> {
         validate_serial(serial)?;
         validate_device_path(device_path)?;
         let local = dest_root.join(local_relative_path(device_path));
         if local.exists() {
-            return Err(AdbError::InvalidArgument(format!("destination exists: {}", local.display())));
+            return Err(AdbError::InvalidArgument(format!(
+                "destination exists: {}",
+                local.display()
+            )));
         }
         if let Some(parent) = local.parent() {
             std::fs::create_dir_all(parent)?;
@@ -254,18 +309,35 @@ impl AdbClient {
         let device_sha256 = self.device_sha256(serial, device_path);
         let tmp = local.with_extension("partial");
         let out = self.runner.run(
-            &[s("-s"), s(serial), s("pull"), s("-a"), s(device_path), tmp.to_string_lossy().to_string()],
+            &[
+                s("-s"),
+                s(serial),
+                s("pull"),
+                s("-a"),
+                s(device_path),
+                tmp.to_string_lossy().to_string(),
+            ],
             PULL,
         )?;
         if out.code != Some(0) || !tmp.is_file() {
             let _ = std::fs::remove_file(&tmp);
-            return Err(AdbError::Failed { code: out.code, stderr: out.stderr.trim().to_string() });
+            return Err(AdbError::Failed {
+                code: out.code,
+                stderr: out.stderr.trim().to_string(),
+            });
         }
         std::fs::rename(&tmp, &local)?;
         let (sha256, size) = pr_model::evidence::sha256_file(&local, None, |_| {})
             .map_err(|e| AdbError::Io(std::io::Error::other(e.to_string())))?;
         let transfer_verified = device_sha256.as_ref().map(|d| *d == sha256);
-        Ok(PulledFile { device_path: device_path.to_string(), local_path: local, size, sha256, device_sha256, transfer_verified })
+        Ok(PulledFile {
+            device_path: device_path.to_string(),
+            local_path: local,
+            size,
+            sha256,
+            device_sha256,
+            transfer_verified,
+        })
     }
 
     // ----- Root-only, explicitly confirmed, read-only operations -----
@@ -273,7 +345,9 @@ impl AdbClient {
     fn require_root_confirmation(confirmation: &str, serial: &str) -> Result<(), AdbError> {
         let expected = format!("READ-ONLY ROOT ACQUISITION {serial}");
         if confirmation != expected {
-            return Err(AdbError::ConfirmationRequired(format!("type exactly: {expected}")));
+            return Err(AdbError::ConfirmationRequired(format!(
+                "type exactly: {expected}"
+            )));
         }
         Ok(())
     }
@@ -286,7 +360,11 @@ impl AdbClient {
         Ok(out.code == Some(0) && out.stdout_text().contains("uid=0"))
     }
 
-    pub fn list_partitions(&self, serial: &str, confirmation: &str) -> Result<Vec<String>, AdbError> {
+    pub fn list_partitions(
+        &self,
+        serial: &str,
+        confirmation: &str,
+    ) -> Result<Vec<String>, AdbError> {
         Self::require_root_confirmation(confirmation, serial)?;
         let out = self.shell(serial, s("su -c 'ls -1 /dev/block/by-name/'"), SHORT)?;
         Ok(parse::parse_name_list(&out.stdout_text()))
@@ -305,11 +383,20 @@ impl AdbClient {
     ) -> Result<PartitionImage, AdbError> {
         Self::require_root_confirmation(confirmation, serial)?;
         validate_partition_name(partition)?;
-        if !self.list_partitions(serial, confirmation)?.iter().any(|p| p == partition) {
-            return Err(AdbError::InvalidArgument(format!("partition {partition} not found on device")));
+        if !self
+            .list_partitions(serial, confirmation)?
+            .iter()
+            .any(|p| p == partition)
+        {
+            return Err(AdbError::InvalidArgument(format!(
+                "partition {partition} not found on device"
+            )));
         }
         if dest.exists() {
-            return Err(AdbError::InvalidArgument(format!("destination exists: {}", dest.display())));
+            return Err(AdbError::InvalidArgument(format!(
+                "destination exists: {}",
+                dest.display()
+            )));
         }
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
@@ -330,13 +417,33 @@ impl AdbClient {
                 self.inner.flush()
             }
         }
-        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(dest)?;
-        let mut w = HashWriter { inner: std::io::BufWriter::new(file), h: Sha256::new(), n: 0 };
-        let cmd = format!("su -c {}", sh_quote(&format!("dd if=/dev/block/by-name/{partition} bs=4194304 2>/dev/null")));
-        let out = self.runner.run_streaming(&[s("-s"), s(serial), s("exec-out"), cmd], &mut w, cancel, progress)?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dest)?;
+        let mut w = HashWriter {
+            inner: std::io::BufWriter::new(file),
+            h: Sha256::new(),
+            n: 0,
+        };
+        let cmd = format!(
+            "su -c {}",
+            sh_quote(&format!(
+                "dd if=/dev/block/by-name/{partition} bs=4194304 2>/dev/null"
+            ))
+        );
+        let out = self.runner.run_streaming(
+            &[s("-s"), s(serial), s("exec-out"), cmd],
+            &mut w,
+            cancel,
+            progress,
+        )?;
         w.flush()?;
         if out.code != Some(0) {
-            return Err(AdbError::Failed { code: out.code, stderr: out.stderr });
+            return Err(AdbError::Failed {
+                code: out.code,
+                stderr: out.stderr,
+            });
         }
         let mut notes = vec![
             "Acquired with dd over adb exec-out; the device was only read.".to_string(),
@@ -362,9 +469,11 @@ mod tests {
     use std::sync::Mutex;
 
     /// Canned-response runner that records every argv it receives.
+    type Responder = Box<dyn Fn(&[String]) -> CmdOutput + Send + Sync>;
+
     struct Fake {
         calls: Mutex<Vec<Vec<String>>>,
-        respond: Box<dyn Fn(&[String]) -> CmdOutput + Send + Sync>,
+        respond: Responder,
     }
 
     impl CommandRunner for Fake {
@@ -372,16 +481,30 @@ mod tests {
             self.calls.lock().unwrap().push(args.to_vec());
             Ok((self.respond)(args))
         }
-        fn run_streaming(&self, args: &[String], sink: &mut dyn Write, _: &CancelFlag, p: &mut dyn FnMut(u64)) -> Result<CmdOutput, AdbError> {
+        fn run_streaming(
+            &self,
+            args: &[String],
+            sink: &mut dyn Write,
+            _: &CancelFlag,
+            p: &mut dyn FnMut(u64),
+        ) -> Result<CmdOutput, AdbError> {
             self.calls.lock().unwrap().push(args.to_vec());
             sink.write_all(b"BLOCKDATA")?;
             p(9);
-            Ok(CmdOutput { code: Some(0), stdout: vec![], stderr: String::new() })
+            Ok(CmdOutput {
+                code: Some(0),
+                stdout: vec![],
+                stderr: String::new(),
+            })
         }
     }
 
     fn ok(s: &str) -> CmdOutput {
-        CmdOutput { code: Some(0), stdout: s.as_bytes().to_vec(), stderr: String::new() }
+        CmdOutput {
+            code: Some(0),
+            stdout: s.as_bytes().to_vec(),
+            stderr: String::new(),
+        }
     }
 
     fn fake() -> (Arc<Fake>, AdbClient) {
@@ -416,11 +539,19 @@ mod tests {
         let i = c.device_info("ABC123").unwrap();
         assert!(i.is_realme);
         assert_eq!(i.sdk, Some(33));
-        assert_eq!(i.vendor_ui.as_deref(), Some("ro.build.version.realmeui=V4.0"));
+        assert_eq!(
+            i.vendor_ui.as_deref(),
+            Some("ro.build.version.realmeui=V4.0")
+        );
         let caps = c.capabilities("ABC123").unwrap();
         assert!(caps.scoped_storage);
-        assert!(caps.limitations.iter().any(|l| l.contains("file-based encryption")));
-        assert!(matches!(c.device_info("UNAUTH"), Err(AdbError::DeviceState(m)) if m.contains("not authorized")));
+        assert!(caps
+            .limitations
+            .iter()
+            .any(|l| l.contains("file-based encryption")));
+        assert!(
+            matches!(c.device_info("UNAUTH"), Err(AdbError::DeviceState(m)) if m.contains("not authorized"))
+        );
     }
 
     #[test]
@@ -429,7 +560,10 @@ mod tests {
         let r = c.discover("ABC123", &["/sdcard/".into()]).unwrap();
         assert_eq!(r.files.len(), 2);
         let calls = f.calls.lock().unwrap();
-        let find = calls.iter().find(|a| a.last().unwrap().starts_with("find")).unwrap();
+        let find = calls
+            .iter()
+            .find(|a| a.last().unwrap().starts_with("find"))
+            .unwrap();
         assert_eq!(&find[..3], &["-s", "ABC123", "shell"]);
         assert!(find[3].starts_with("find '/sdcard/' -type f \\( -iname '*.jpg'"));
         drop(calls);
@@ -440,11 +574,15 @@ mod tests {
     fn pull_never_overwrites_and_records_hashes() {
         let dir = tempfile::tempdir().unwrap();
         let (_, c) = fake();
-        let p = c.pull("ABC123", "/sdcard/DCIM/Camera/IMG_1.jpg", dir.path()).unwrap();
+        let p = c
+            .pull("ABC123", "/sdcard/DCIM/Camera/IMG_1.jpg", dir.path())
+            .unwrap();
         assert_eq!(p.size, 5);
         assert_eq!(p.transfer_verified, Some(false)); // fake device hash is zeros
         assert!(p.local_path.starts_with(dir.path()));
-        assert!(c.pull("ABC123", "/sdcard/DCIM/Camera/IMG_1.jpg", dir.path()).is_err());
+        assert!(c
+            .pull("ABC123", "/sdcard/DCIM/Camera/IMG_1.jpg", dir.path())
+            .is_err());
         assert!(c.pull("ABC;reboot", "/sdcard/x.jpg", dir.path()).is_err());
     }
 
@@ -458,10 +596,17 @@ mod tests {
             c.acquire_partition("ABC123", "userdata", &dest, "yes", &cancel, &mut |_| {}),
             Err(AdbError::ConfirmationRequired(_))
         ));
-        assert!(f.calls.lock().unwrap().is_empty(), "nothing may run before confirmation");
+        assert!(
+            f.calls.lock().unwrap().is_empty(),
+            "nothing may run before confirmation"
+        );
         let conf = "READ-ONLY ROOT ACQUISITION ABC123";
-        assert!(c.acquire_partition("ABC123", "system_x", &dest, conf, &cancel, &mut |_| {}).is_err());
-        let img = c.acquire_partition("ABC123", "userdata", &dest, conf, &cancel, &mut |_| {}).unwrap();
+        assert!(c
+            .acquire_partition("ABC123", "system_x", &dest, conf, &cancel, &mut |_| {})
+            .is_err());
+        let img = c
+            .acquire_partition("ABC123", "userdata", &dest, conf, &cancel, &mut |_| {})
+            .unwrap();
         assert_eq!(img.size, 9);
         assert_eq!(std::fs::read(&dest).unwrap(), b"BLOCKDATA");
         assert!(img.notes.iter().any(|n| n.contains("encrypted")));

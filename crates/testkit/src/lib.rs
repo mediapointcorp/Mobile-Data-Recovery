@@ -53,7 +53,16 @@ mod tests {
 
     #[test]
     fn fixtures_are_decodable() {
-        let j = images::jpeg(200, 150, 1, &images::JpegOpts { exif_thumbnail: true, progressive: true, ..Default::default() });
+        let j = images::jpeg(
+            200,
+            150,
+            1,
+            &images::JpegOpts {
+                exif_thumbnail: true,
+                progressive: true,
+                ..Default::default()
+            },
+        );
         let img = image::load_from_memory(&j).unwrap();
         assert_eq!((img.width(), img.height()), (200, 150));
         let t = images::embedded_thumbnail(200, 150, 1);

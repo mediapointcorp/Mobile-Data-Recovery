@@ -22,7 +22,13 @@ pub fn parse_devices(out: &str) -> Vec<ListedDevice> {
             let mut parts = l.split_whitespace();
             let serial = parts.next()?.to_string();
             let state = parts.next()?.to_string();
-            let mut d = ListedDevice { serial, state, model: None, product: None, transport_id: None };
+            let mut d = ListedDevice {
+                serial,
+                state,
+                model: None,
+                product: None,
+                transport_id: None,
+            };
             for kv in parts {
                 if let Some((k, v)) = kv.split_once(':') {
                     match k {
@@ -71,7 +77,11 @@ pub fn parse_stat_lines(out: &str) -> (Vec<ListedFile>, Vec<String>) {
             let size = it.next()?.trim().parse::<u64>().ok()?;
             let mtime = it.next()?.trim().parse::<i64>().ok()?;
             let path = it.next()?;
-            path.starts_with('/').then(|| ListedFile { path: path.to_string(), size, mtime })
+            path.starts_with('/').then(|| ListedFile {
+                path: path.to_string(),
+                size,
+                mtime,
+            })
         })();
         match parsed {
             Some(f) => files.push(f),
@@ -90,7 +100,10 @@ pub fn parse_sha256sum(out: &str) -> Option<String> {
 
 /// Parse `df -k <path>` output: (total KiB, available KiB).
 pub fn parse_df(out: &str) -> Option<(u64, u64)> {
-    let line = out.lines().filter(|l| !l.starts_with("Filesystem")).find(|l| !l.trim().is_empty())?;
+    let line = out
+        .lines()
+        .filter(|l| !l.starts_with("Filesystem"))
+        .find(|l| !l.trim().is_empty())?;
     let cols: Vec<&str> = line.split_whitespace().collect();
     if cols.len() < 4 {
         return None;
@@ -114,7 +127,9 @@ pub fn parse_storage_volumes(out: &str) -> Vec<String> {
         .filter(|n| {
             n.len() == 9
                 && n.as_bytes()[4] == b'-'
-                && n.chars().enumerate().all(|(i, c)| i == 4 || c.is_ascii_hexdigit())
+                && n.chars()
+                    .enumerate()
+                    .all(|(i, c)| i == 4 || c.is_ascii_hexdigit())
         })
         .map(String::from)
         .collect()
@@ -137,7 +152,9 @@ mod tests {
 
     #[test]
     fn getprop() {
-        let m = parse_getprop("[ro.product.brand]: [realme]\n[ro.build.version.release]: [13]\n[empty]: []\n");
+        let m = parse_getprop(
+            "[ro.product.brand]: [realme]\n[ro.build.version.release]: [13]\n[empty]: []\n",
+        );
         assert_eq!(m["ro.product.brand"], "realme");
         assert_eq!(m["empty"], "");
     }
@@ -145,15 +162,28 @@ mod tests {
     #[test]
     fn stat_lines() {
         let (f, other) = parse_stat_lines("1234:1700000000:/sdcard/DCIM/Camera/IMG:1.jpg\nfind: /sdcard/Android/data: Permission denied\n");
-        assert_eq!(f, vec![ListedFile { path: "/sdcard/DCIM/Camera/IMG:1.jpg".into(), size: 1234, mtime: 1_700_000_000 }]);
+        assert_eq!(
+            f,
+            vec![ListedFile {
+                path: "/sdcard/DCIM/Camera/IMG:1.jpg".into(),
+                size: 1234,
+                mtime: 1_700_000_000
+            }]
+        );
         assert_eq!(other.len(), 1);
     }
 
     #[test]
     fn misc() {
-        assert_eq!(parse_sha256sum(&format!("{}  /sdcard/x", "A".repeat(64))), Some("a".repeat(64)));
+        assert_eq!(
+            parse_sha256sum(&format!("{}  /sdcard/x", "A".repeat(64))),
+            Some("a".repeat(64))
+        );
         assert_eq!(parse_sha256sum("sha256sum: not found"), None);
         assert_eq!(parse_df("Filesystem 1K-blocks Used Available Use% Mounted on\n/dev/fuse 115000000 60000000 55000000 53% /storage/emulated\n"), Some((115_000_000, 55_000_000)));
-        assert_eq!(parse_storage_volumes("emulated\nself\n1A2B-3C4D\n"), vec!["1A2B-3C4D"]);
+        assert_eq!(
+            parse_storage_volumes("emulated\nself\n1A2B-3C4D\n"),
+            vec!["1A2B-3C4D"]
+        );
     }
 }

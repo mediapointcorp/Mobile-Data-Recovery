@@ -30,7 +30,11 @@ fn rank(r: &RecoveryResult) -> (u8, String, String) {
         .as_deref()
         .map(|p| if p.contains("/DCIM/") { "0" } else { "1" })
         .unwrap_or("2");
-    (class_rank, format!("{camera}{}", r.source_path.clone().unwrap_or_default()), r.id.clone())
+    (
+        class_rank,
+        format!("{camera}{}", r.source_path.clone().unwrap_or_default()),
+        r.id.clone(),
+    )
 }
 
 /// Mark exact duplicates and visually similar results.
@@ -71,12 +75,20 @@ pub fn dedupe(results: &mut [RecoveryResult], max_distance: u32) -> DedupeStats 
         .iter()
         .enumerate()
         .filter(|(_, r)| r.classification != Classification::Thumbnail)
-        .filter_map(|(i, r)| r.perceptual_hash.as_deref().and_then(parse_hash).map(|h| (i, h)))
+        .filter_map(|(i, r)| {
+            r.perceptual_hash
+                .as_deref()
+                .and_then(parse_hash)
+                .map(|h| (i, h))
+        })
         .collect();
     let mut buckets: HashMap<(u8, u8), Vec<usize>> = HashMap::new();
     for (k, &(_, h)) in hashes.iter().enumerate() {
         for band in 0..8u8 {
-            buckets.entry((band, (h >> (band * 8)) as u8)).or_default().push(k);
+            buckets
+                .entry((band, (h >> (band * 8)) as u8))
+                .or_default()
+                .push(k);
         }
     }
     let mut pairs = std::collections::BTreeSet::new();
@@ -120,11 +132,31 @@ mod tests {
     #[test]
     fn exact_and_similar() {
         let mut v = vec![
-            r(Classification::ExistingOriginal, "aa", "00000000000000ff", "/sdcard/Download/x.jpg"),
-            r(Classification::ExistingOriginal, "aa", "00000000000000ff", "/sdcard/DCIM/Camera/x.jpg"),
+            r(
+                Classification::ExistingOriginal,
+                "aa",
+                "00000000000000ff",
+                "/sdcard/Download/x.jpg",
+            ),
+            r(
+                Classification::ExistingOriginal,
+                "aa",
+                "00000000000000ff",
+                "/sdcard/DCIM/Camera/x.jpg",
+            ),
             r(Classification::CarvedImage, "aa", "00000000000000ff", ""),
-            r(Classification::ExistingOriginal, "bb", "00000000000000fe", "/sdcard/DCIM/y.jpg"),
-            r(Classification::ExistingOriginal, "cc", "ffffffffffffffff", "/sdcard/DCIM/z.jpg"),
+            r(
+                Classification::ExistingOriginal,
+                "bb",
+                "00000000000000fe",
+                "/sdcard/DCIM/y.jpg",
+            ),
+            r(
+                Classification::ExistingOriginal,
+                "cc",
+                "ffffffffffffffff",
+                "/sdcard/DCIM/z.jpg",
+            ),
         ];
         let s = dedupe(&mut v, 6);
         assert_eq!(s.exact_groups, 1);
@@ -134,8 +166,14 @@ mod tests {
         assert_eq!(v[0].classification, Classification::ExistingDuplicate);
         // Carved copy keeps its classification.
         assert_eq!(v[2].classification, Classification::CarvedImage);
-        assert!(v[2].associations.iter().any(|a| a.relation == Relation::DuplicateOf && a.result_id == v[1].id));
-        assert!(v[3].associations.iter().any(|a| a.relation == Relation::SimilarTo));
+        assert!(v[2]
+            .associations
+            .iter()
+            .any(|a| a.relation == Relation::DuplicateOf && a.result_id == v[1].id));
+        assert!(v[3]
+            .associations
+            .iter()
+            .any(|a| a.relation == Relation::SimilarTo));
         assert!(v[4].associations.is_empty());
     }
 }

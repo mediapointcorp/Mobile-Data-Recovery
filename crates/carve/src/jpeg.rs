@@ -92,12 +92,28 @@ pub fn parse_jpeg(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
     loop {
         st.segments += 1;
         if st.segments > limits.max_structures {
-            return Ok(finish(cand, &st, c.position(), EndStatus::Corrupt, "too many segments".into()));
+            return Ok(finish(
+                cand,
+                &st,
+                c.position(),
+                EndStatus::Corrupt,
+                "too many segments".into(),
+            ));
         }
         let marker_pos = c.position();
         let Some(b) = c.next_u8()? else {
-            let why = if hit_limit(&c) { "maximum candidate length reached" } else { "source ended before EOI" };
-            return Ok(finish(cand, &st, marker_pos, EndStatus::Truncated, why.into()));
+            let why = if hit_limit(&c) {
+                "maximum candidate length reached"
+            } else {
+                "source ended before EOI"
+            };
+            return Ok(finish(
+                cand,
+                &st,
+                marker_pos,
+                EndStatus::Truncated,
+                why.into(),
+            ));
         };
         if b != 0xFF {
             return Ok(finish(
@@ -105,7 +121,10 @@ pub fn parse_jpeg(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
                 &st,
                 marker_pos,
                 EndStatus::Corrupt,
-                format!("expected marker at +{}, found 0x{b:02X}", marker_pos - start),
+                format!(
+                    "expected marker at +{}, found 0x{b:02X}",
+                    marker_pos - start
+                ),
             ));
         }
         // Optional fill bytes.
@@ -114,7 +133,13 @@ pub fn parse_jpeg(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
             match c.next_u8()? {
                 Some(x) => m = x,
                 None => {
-                    return Ok(finish(cand, &st, marker_pos, EndStatus::Truncated, "source ended inside marker".into()))
+                    return Ok(finish(
+                        cand,
+                        &st,
+                        marker_pos,
+                        EndStatus::Truncated,
+                        "source ended inside marker".into(),
+                    ))
                 }
             }
         }
@@ -140,15 +165,30 @@ pub fn parse_jpeg(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
             ));
         }
         if is_rst(m) || m == 0x01 {
-            cand.diagnostics.push(format!("standalone marker FF{m:02X} outside scan at +{}", marker_pos - start));
+            cand.diagnostics.push(format!(
+                "standalone marker FF{m:02X} outside scan at +{}",
+                marker_pos - start
+            ));
             continue;
         }
 
         let Some(len) = c.read_u16_be()? else {
-            return Ok(finish(cand, &st, marker_pos, EndStatus::Truncated, "source ended in segment length".into()));
+            return Ok(finish(
+                cand,
+                &st,
+                marker_pos,
+                EndStatus::Truncated,
+                "source ended in segment length".into(),
+            ));
         };
         if len < 2 {
-            return Ok(finish(cand, &st, marker_pos, EndStatus::Corrupt, format!("segment FF{m:02X} length {len} < 2")));
+            return Ok(finish(
+                cand,
+                &st,
+                marker_pos,
+                EndStatus::Corrupt,
+                format!("segment FF{m:02X} length {len} < 2"),
+            ));
         }
         let payload_len = (len - 2) as usize;
         let seg_start = c.position();
@@ -158,7 +198,13 @@ pub fn parse_jpeg(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
         if needs_payload {
             let mut p = vec![0u8; payload_len];
             if !c.read_exact(&mut p)? {
-                return Ok(finish(cand, &st, marker_pos, EndStatus::Truncated, "source ended inside segment".into()));
+                return Ok(finish(
+                    cand,
+                    &st,
+                    marker_pos,
+                    EndStatus::Truncated,
+                    "source ended inside segment".into(),
+                ));
             }
             if let Err(why) = check_segment(m, &p, &mut st) {
                 return Ok(finish(cand, &st, marker_pos, EndStatus::Corrupt, why));
@@ -171,7 +217,8 @@ pub fn parse_jpeg(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
             }
         } else {
             if (0xE0..=0xEF).contains(&m) {
-                cand.embedded_windows.push((seg_start, seg_start + payload_len as u64));
+                cand.embedded_windows
+                    .push((seg_start, seg_start + payload_len as u64));
                 let mut tag = [0u8; 4];
                 let peek_len = payload_len.min(4);
                 if c.read_exact(&mut tag[..peek_len])? {
@@ -184,13 +231,20 @@ pub fn parse_jpeg(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
                         _ => None,
                     };
                     if let Some(n) = name {
-                        cand.diagnostics.push(format!("APP{} {n} ({payload_len} bytes)", m - 0xE0));
+                        cand.diagnostics
+                            .push(format!("APP{} {n} ({payload_len} bytes)", m - 0xE0));
                     }
                 }
                 c.seek(seg_start);
             }
             if c.skip(payload_len as u64) != payload_len as u64 {
-                return Ok(finish(cand, &st, marker_pos, EndStatus::Truncated, "source ended inside segment".into()));
+                return Ok(finish(
+                    cand,
+                    &st,
+                    marker_pos,
+                    EndStatus::Truncated,
+                    "source ended inside segment".into(),
+                ));
             }
         }
 
@@ -198,10 +252,16 @@ pub fn parse_jpeg(src: &dyn ReadAt, start: u64, limits: &CarveLimits) -> io::Res
             match scan_entropy(&mut c, &mut st, limits)? {
                 ScanEnd::Marker => continue,
                 ScanEnd::Eof(pos) => {
-                    let why = if hit_limit(&c) { "maximum candidate length reached" } else { "source ended inside scan data" };
+                    let why = if hit_limit(&c) {
+                        "maximum candidate length reached"
+                    } else {
+                        "source ended inside scan data"
+                    };
                     return Ok(finish(cand, &st, pos, EndStatus::Truncated, why.into()));
                 }
-                ScanEnd::Break(pos, why) => return Ok(finish(cand, &st, pos, EndStatus::Corrupt, why)),
+                ScanEnd::Break(pos, why) => {
+                    return Ok(finish(cand, &st, pos, EndStatus::Corrupt, why))
+                }
             }
         }
     }
@@ -387,23 +447,33 @@ fn scan_entropy(c: &mut Cursor, st: &mut State, limits: &CarveLimits) -> io::Res
             continue;
         }
         if m == SOI {
-            return Ok(ScanEnd::Break(ff_pos, "SOI inside scan data — another file starts here".into()));
+            return Ok(ScanEnd::Break(
+                ff_pos,
+                "SOI inside scan data — another file starts here".into(),
+            ));
         }
         if m == EOI || is_length_marker(m) {
             let sequential_done = !st.progressive() && st.seq_components >= st.components as u32;
             let allowed = if sequential_done {
                 matches!(m, EOI | DNL)
             } else {
-                matches!(m, EOI | DNL | SOS | DHT | DQT | DRI | 0xCC | 0xFE) || (0xE0..=0xEF).contains(&m)
+                matches!(m, EOI | DNL | SOS | DHT | DQT | DRI | 0xCC | 0xFE)
+                    || (0xE0..=0xEF).contains(&m)
             };
             if !allowed {
-                return Ok(ScanEnd::Break(ff_pos, format!("unexpected marker FF{m:02X} after scan data")));
+                return Ok(ScanEnd::Break(
+                    ff_pos,
+                    format!("unexpected marker FF{m:02X} after scan data"),
+                ));
             }
             c.seek(ff_pos);
             st.pending_cut = Some(ff_pos);
             return Ok(ScanEnd::Marker);
         }
-        return Ok(ScanEnd::Break(ff_pos, format!("invalid byte pair FF{m:02X} in scan data")));
+        return Ok(ScanEnd::Break(
+            ff_pos,
+            format!("invalid byte pair FF{m:02X} in scan data"),
+        ));
     }
 }
 
@@ -418,10 +488,21 @@ fn fill(mut cand: ParsedCandidate, st: &State) -> ParsedCandidate {
             0xC3 => "lossless",
             _ => "other SOF",
         };
-        cand.diagnostics.insert(0, format!("SOF{} {kind}, {} components, {} scan(s)", sof - 0xC0, st.components, st.scans));
+        cand.diagnostics.insert(
+            0,
+            format!(
+                "SOF{} {kind}, {} components, {} scan(s)",
+                sof - 0xC0,
+                st.components,
+                st.scans
+            ),
+        );
     }
     if st.restart_interval > 0 {
-        cand.diagnostics.push(format!("restart interval {}, {} restart markers", st.restart_interval, st.restarts));
+        cand.diagnostics.push(format!(
+            "restart interval {}, {} restart markers",
+            st.restart_interval, st.restarts
+        ));
     }
     cand
 }
@@ -429,13 +510,25 @@ fn fill(mut cand: ParsedCandidate, st: &State) -> ParsedCandidate {
 /// Finish a candidate that did not reach EOI. Data before `cut` is kept if
 /// at least one scan's image data was reached; otherwise the hit is
 /// rejected as a false positive / header-only fragment.
-fn finish(mut cand: ParsedCandidate, st: &State, cut: u64, status: EndStatus, why: String) -> ParseOutcome {
+fn finish(
+    mut cand: ParsedCandidate,
+    st: &State,
+    cut: u64,
+    status: EndStatus,
+    why: String,
+) -> ParseOutcome {
     if st.sof.is_none() || st.scans == 0 {
         return ParseOutcome::Rejected(format!("no image data: {why}"));
     }
     let cut = st.pending_cut.map_or(cut, |p| p.min(cut));
     let (cut, why) = match st.zero_cut {
-        Some(z) if z < cut => (z, format!("{why}; cut at earlier zero-filled run at +{}", z - cand.offset)),
+        Some(z) if z < cut => (
+            z,
+            format!(
+                "{why}; cut at earlier zero-filled run at +{}",
+                z - cand.offset
+            ),
+        ),
         _ => (cut, why),
     };
     cand.length = cut - cand.offset;
@@ -509,7 +602,9 @@ mod tests {
 
     #[test]
     fn restart_sequence_break_cuts_at_last_good_restart() {
-        let scan = [0x11, 0xFF, 0xD0, 0x22, 0xFF, 0xD1, 0x33, 0xFF, 0xD5, 0x44, 0xFF, 0xD9];
+        let scan = [
+            0x11, 0xFF, 0xD0, 0x22, 0xFF, 0xD1, 0x33, 0xFF, 0xD5, 0x44, 0xFF, 0xD9,
+        ];
         let d = skeleton(&scan, Some(1));
         let sos_end = d.len() - scan.len();
         match parse(d) {
@@ -556,7 +651,10 @@ mod tests {
         assert!(matches!(parse(d.clone()), ParseOutcome::Rejected(_)));
         d.extend_from_slice(&[0x12, 0x34, 0x56]);
         assert!(matches!(parse(d), ParseOutcome::Rejected(_)));
-        assert!(matches!(parse(vec![0xFF, 0xD8, 0xFF, 0x02, 0, 0]), ParseOutcome::Rejected(_)));
+        assert!(matches!(
+            parse(vec![0xFF, 0xD8, 0xFF, 0x02, 0, 0]),
+            ParseOutcome::Rejected(_)
+        ));
     }
 
     #[test]

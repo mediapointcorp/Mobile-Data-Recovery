@@ -16,7 +16,10 @@
 pub mod detect;
 pub mod fat;
 
-pub use detect::{analyze_layout, EncryptionState, ImageLayout, PartitionScheme, SupportLevel, VolumeKind, VolumeReport};
+pub use detect::{
+    analyze_layout, EncryptionState, ImageLayout, PartitionScheme, SupportLevel, VolumeKind,
+    VolumeReport,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum FsError {

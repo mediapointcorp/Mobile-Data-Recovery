@@ -30,7 +30,13 @@ pub enum Scenario {
 impl Scenario {
     /// Whether a byte-identical full recovery is possible by carving.
     pub fn fully_recoverable(self) -> bool {
-        matches!(self, Scenario::Intact | Scenario::ChunkBoundary | Scenario::Duplicate | Scenario::ThumbnailOnly)
+        matches!(
+            self,
+            Scenario::Intact
+                | Scenario::ChunkBoundary
+                | Scenario::Duplicate
+                | Scenario::ThumbnailOnly
+        )
     }
 }
 
@@ -103,7 +109,16 @@ impl DiskBuilder {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn record(&mut self, scenario: Scenario, format: ImageFormat, offset: u64, stored: u64, orig: &[u8], w: u32, h: u32) -> usize {
+    fn record(
+        &mut self,
+        scenario: Scenario,
+        format: ImageFormat,
+        offset: u64,
+        stored: u64,
+        orig: &[u8],
+        w: u32,
+        h: u32,
+    ) -> usize {
         let id = self.manifest.entries.len();
         self.manifest.entries.push(TruthEntry {
             id,
@@ -120,33 +135,71 @@ impl DiskBuilder {
     }
 
     /// Place a whole file contiguously.
-    pub fn place(&mut self, scenario: Scenario, format: ImageFormat, bytes: &[u8], w: u32, h: u32) -> usize {
+    pub fn place(
+        &mut self,
+        scenario: Scenario,
+        format: ImageFormat,
+        bytes: &[u8],
+        w: u32,
+        h: u32,
+    ) -> usize {
         let off = self.pos();
         self.data.extend_from_slice(bytes);
         self.record(scenario, format, off, bytes.len() as u64, bytes, w, h)
     }
 
     /// Place the first `keep` bytes only.
-    pub fn place_truncated(&mut self, format: ImageFormat, bytes: &[u8], keep: usize, w: u32, h: u32) -> usize {
+    pub fn place_truncated(
+        &mut self,
+        format: ImageFormat,
+        bytes: &[u8],
+        keep: usize,
+        w: u32,
+        h: u32,
+    ) -> usize {
         let off = self.pos();
         self.data.extend_from_slice(&bytes[..keep]);
         self.record(Scenario::Truncated, format, off, keep as u64, bytes, w, h)
     }
 
     /// Overwrite `len` bytes at `at` (relative) with random garbage.
-    pub fn place_corrupted(&mut self, format: ImageFormat, bytes: &[u8], at: usize, len: usize, w: u32, h: u32) -> usize {
+    pub fn place_corrupted(
+        &mut self,
+        format: ImageFormat,
+        bytes: &[u8],
+        at: usize,
+        len: usize,
+        w: u32,
+        h: u32,
+    ) -> usize {
         let off = self.pos();
         let mut b = bytes.to_vec();
         let mut g = self.rng.bytes(len);
         scrub_signatures(&mut g);
         b[at..at + len].copy_from_slice(&g);
         self.data.extend_from_slice(&b);
-        self.record(Scenario::Corrupted, format, off, bytes.len() as u64, bytes, w, h)
+        self.record(
+            Scenario::Corrupted,
+            format,
+            off,
+            bytes.len() as u64,
+            bytes,
+            w,
+            h,
+        )
     }
 
     /// Store `bytes[..split]`, then `gap` bytes of foreign random data, then
     /// the remainder.
-    pub fn place_fragmented(&mut self, format: ImageFormat, bytes: &[u8], split: usize, gap: usize, w: u32, h: u32) -> usize {
+    pub fn place_fragmented(
+        &mut self,
+        format: ImageFormat,
+        bytes: &[u8],
+        split: usize,
+        gap: usize,
+        w: u32,
+        h: u32,
+    ) -> usize {
         let off = self.pos();
         self.data.extend_from_slice(&bytes[..split]);
         self.random(gap);
@@ -210,7 +263,9 @@ pub fn scrub_signatures(b: &mut [u8]) {
         if b[i] == 0xFF && i + 1 < b.len() && b[i + 1] == 0xD8 {
             b[i + 1] = 0x00;
         }
-        if i + 4 <= b.len() && (&b[i..i + 4] == b"RIFF" || &b[i..i + 4] == b"ftyp" || &b[i..i + 4] == b"\x89PNG") {
+        if i + 4 <= b.len()
+            && (&b[i..i + 4] == b"RIFF" || &b[i..i + 4] == b"ftyp" || &b[i..i + 4] == b"\x89PNG")
+        {
             b[i] = b'x';
         }
     }
@@ -299,7 +354,15 @@ pub fn standard_disk(p: &StandardDiskParams) -> (Vec<u8>, Manifest) {
         d.zeros(8192);
 
         let (w, h) = dims(d.rng());
-        let j = images::jpeg(w, h, next_seed(), &JpegOpts { restart_interval: Some(2), ..Default::default() });
+        let j = images::jpeg(
+            w,
+            h,
+            next_seed(),
+            &JpegOpts {
+                restart_interval: Some(2),
+                ..Default::default()
+            },
+        );
         let at = j.len() / 2;
         d.place_corrupted(ImageFormat::Jpeg, &j, at, 2048.min(j.len() / 4), w, h);
         d.random(4096);
@@ -312,7 +375,15 @@ pub fn standard_disk(p: &StandardDiskParams) -> (Vec<u8>, Manifest) {
     }
     // Thumbnail-only: a small JPEG preview whose original is absent.
     for _ in 0..2 {
-        let t = images::jpeg(160, 120, next_seed(), &JpegOpts { quality: 70, ..Default::default() });
+        let t = images::jpeg(
+            160,
+            120,
+            next_seed(),
+            &JpegOpts {
+                quality: 70,
+                ..Default::default()
+            },
+        );
         d.place(Scenario::ThumbnailOnly, ImageFormat::Jpeg, &t, 160, 120);
         d.random(1024);
     }
@@ -323,14 +394,26 @@ pub fn standard_disk(p: &StandardDiskParams) -> (Vec<u8>, Manifest) {
         d.place(Scenario::Intact, ImageFormat::Png, &png, w, h);
         d.random(3000);
         let webp = images::webp_lossless(w / 2 + 8, h / 2 + 8, next_seed());
-        d.place(Scenario::Intact, ImageFormat::Webp, &webp, w / 2 + 8, h / 2 + 8);
+        d.place(
+            Scenario::Intact,
+            ImageFormat::Webp,
+            &webp,
+            w / 2 + 8,
+            h / 2 + 8,
+        );
         d.random(3000);
     }
     let heif = images::heif_like(640, 480, 20_000, next_seed());
     d.place(Scenario::Intact, ImageFormat::Heic, &heif, 640, 480);
     d.random(3000);
     // False positives.
-    for f in [ImageFormat::Jpeg, ImageFormat::Png, ImageFormat::Webp, ImageFormat::Heic, ImageFormat::Jpeg] {
+    for f in [
+        ImageFormat::Jpeg,
+        ImageFormat::Png,
+        ImageFormat::Webp,
+        ImageFormat::Heic,
+        ImageFormat::Jpeg,
+    ] {
         d.place_false_positive(f);
         d.random(1024);
     }

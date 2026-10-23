@@ -110,7 +110,12 @@ impl ScanSink for VecSink {
 }
 
 /// Parse a candidate of a given format at `offset`.
-pub fn parse_at(src: &dyn ReadAt, format: ImageFormat, offset: u64, limits: &CarveLimits) -> io::Result<ParseOutcome> {
+pub fn parse_at(
+    src: &dyn ReadAt,
+    format: ImageFormat,
+    offset: u64,
+    limits: &CarveLimits,
+) -> io::Result<ParseOutcome> {
     match format {
         ImageFormat::Jpeg => parse_jpeg(src, offset, limits),
         ImageFormat::Png => parse_png(src, offset, limits),
@@ -137,7 +142,13 @@ impl Matchers {
 }
 
 /// Find signature starts `s` with `base + s` in `[base, region_end)`.
-fn find_signatures(m: &Matchers, buf: &[u8], base: u64, region_len: usize, f: FormatSet) -> Vec<(u64, ImageFormat)> {
+fn find_signatures(
+    m: &Matchers,
+    buf: &[u8],
+    base: u64,
+    region_len: usize,
+    f: FormatSet,
+) -> Vec<(u64, ImageFormat)> {
     let mut hits = Vec::new();
     if f.jpeg {
         for p in memchr::memchr_iter(0xFF, buf) {
@@ -226,7 +237,9 @@ pub fn scan(
                 ParseOutcome::Rejected(reason) => {
                     state.stats.rejected += 1;
                     let key = format!("{}: {}", fmt.extension(), reason_key(&reason));
-                    if state.stats.rejected_reasons.len() < 64 || state.stats.rejected_reasons.contains_key(&key) {
+                    if state.stats.rejected_reasons.len() < 64
+                        || state.stats.rejected_reasons.contains_key(&key)
+                    {
                         *state.stats.rejected_reasons.entry(key).or_default() += 1;
                     }
                 }

@@ -356,11 +356,23 @@ mod tests {
 
     #[test]
     fn sniff_formats() {
-        assert_eq!(ImageFormat::sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), ImageFormat::Jpeg);
-        assert_eq!(ImageFormat::sniff(b"\x89PNG\r\n\x1a\n...."), ImageFormat::Png);
-        assert_eq!(ImageFormat::sniff(b"RIFF\0\0\0\0WEBPVP8 "), ImageFormat::Webp);
+        assert_eq!(
+            ImageFormat::sniff(&[0xFF, 0xD8, 0xFF, 0xE0]),
+            ImageFormat::Jpeg
+        );
+        assert_eq!(
+            ImageFormat::sniff(b"\x89PNG\r\n\x1a\n...."),
+            ImageFormat::Png
+        );
+        assert_eq!(
+            ImageFormat::sniff(b"RIFF\0\0\0\0WEBPVP8 "),
+            ImageFormat::Webp
+        );
         assert_eq!(ImageFormat::sniff(b"\0\0\0\x18ftypheic"), ImageFormat::Heic);
-        assert_eq!(ImageFormat::sniff(b"\0\0\0\x18ftypisom"), ImageFormat::Unknown);
+        assert_eq!(
+            ImageFormat::sniff(b"\0\0\0\x18ftypisom"),
+            ImageFormat::Unknown
+        );
         assert_eq!(ImageFormat::from_extension("IMG_1.JPEG"), ImageFormat::Jpeg);
     }
 
@@ -383,7 +395,12 @@ mod tests {
 
     #[test]
     fn serde_roundtrip() {
-        let r = RecoveryResult::new("s", RecoveryMethod::RawCarve, ImageFormat::Png, Classification::CarvedImage);
+        let r = RecoveryResult::new(
+            "s",
+            RecoveryMethod::RawCarve,
+            ImageFormat::Png,
+            Classification::CarvedImage,
+        );
         let j = serde_json::to_string(&r).unwrap();
         assert!(j.contains("\"carved_image\""));
         let back: RecoveryResult = serde_json::from_str(&j).unwrap();

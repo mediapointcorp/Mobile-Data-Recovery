@@ -31,14 +31,22 @@ impl Default for JpegOpts {
 /// different seeds give visually distinct images (distinct perceptual hashes).
 pub fn picture(w: u32, h: u32, seed: u64) -> RgbImage {
     let mut rng = Rng::new(seed);
-    let base = [rng.range(0, 255) as f32, rng.range(0, 255) as f32, rng.range(0, 255) as f32];
+    let base = [
+        rng.range(0, 255) as f32,
+        rng.range(0, 255) as f32,
+        rng.range(0, 255) as f32,
+    ];
     let shapes: Vec<(f32, f32, f32, [u8; 3])> = (0..6)
         .map(|_| {
             (
                 rng.range(0, 1000) as f32 / 1000.0,
                 rng.range(0, 1000) as f32 / 1000.0,
                 rng.range(50, 350) as f32 / 1000.0,
-                [rng.range(0, 255) as u8, rng.range(0, 255) as u8, rng.range(0, 255) as u8],
+                [
+                    rng.range(0, 255) as u8,
+                    rng.range(0, 255) as u8,
+                    rng.range(0, 255) as u8,
+                ],
             )
         })
         .collect();
@@ -81,8 +89,13 @@ fn encode_jpeg_raw(img: &RgbImage, opts: &JpegOpts, exif: Option<Vec<u8>>) -> Ve
     if let Some(tiff) = exif {
         enc.add_exif_metadata(&tiff).expect("exif fits");
     }
-    enc.encode(img.as_raw(), img.width() as u16, img.height() as u16, ColorType::Rgb)
-        .expect("jpeg encode");
+    enc.encode(
+        img.as_raw(),
+        img.width() as u16,
+        img.height() as u16,
+        ColorType::Rgb,
+    )
+    .expect("jpeg encode");
     out
 }
 
@@ -94,7 +107,14 @@ pub fn jpeg(w: u32, h: u32, seed: u64, opts: &JpegOpts) -> Vec<u8> {
         let tw = 160u32.min(w);
         let th = (h * tw / w).max(1);
         let small = image::imageops::resize(&img, tw, th, image::imageops::FilterType::Triangle);
-        encode_jpeg_raw(&small, &JpegOpts { quality: 70, ..Default::default() }, None)
+        encode_jpeg_raw(
+            &small,
+            &JpegOpts {
+                quality: 70,
+                ..Default::default()
+            },
+            None,
+        )
     });
     let exif = (thumb.is_some() || opts.exif_datetime.is_some())
         .then(|| exif_tiff(opts.exif_datetime.as_deref(), thumb.as_deref()));
@@ -107,7 +127,14 @@ pub fn embedded_thumbnail(w: u32, h: u32, seed: u64) -> Vec<u8> {
     let tw = 160u32.min(w);
     let th = (h * tw / w).max(1);
     let small = image::imageops::resize(&img, tw, th, image::imageops::FilterType::Triangle);
-    encode_jpeg_raw(&small, &JpegOpts { quality: 70, ..Default::default() }, None)
+    encode_jpeg_raw(
+        &small,
+        &JpegOpts {
+            quality: 70,
+            ..Default::default()
+        },
+        None,
+    )
 }
 
 /// Build a little-endian TIFF structure for EXIF: IFD0 (Make, Model,
@@ -116,16 +143,22 @@ pub fn exif_tiff(datetime: Option<&str>, thumbnail: Option<&[u8]>) -> Vec<u8> {
     // Layout: header(8) | IFD0 | ExifIFD | IFD1 | data area
     let make = b"PhotoRecoveryTest\0";
     let model = b"Synthetic\0";
-    let dt: Vec<u8> = datetime.map(|d| {
-        let mut v = d.as_bytes().to_vec();
-        v.push(0);
-        v
-    }).unwrap_or_default();
+    let dt: Vec<u8> = datetime
+        .map(|d| {
+            let mut v = d.as_bytes().to_vec();
+            v.push(0);
+            v
+        })
+        .unwrap_or_default();
 
     let ifd0_entries = 2 + datetime.is_some() as u16;
     let ifd0_len = 2 + 12 * ifd0_entries as u32 + 4;
     let exif_ifd_len = if datetime.is_some() { 2 + 12 + 4 } else { 0 };
-    let ifd1_len = if thumbnail.is_some() { 2 + 12 * 2 + 4 } else { 0 };
+    let ifd1_len = if thumbnail.is_some() {
+        2 + 12 * 2 + 4
+    } else {
+        0
+    };
     let ifd0_off = 8u32;
     let exif_off = ifd0_off + ifd0_len;
     let ifd1_off = exif_off + exif_ifd_len;
@@ -199,8 +232,8 @@ fn bmff_box(ty: &[u8; 4], body: &[u8]) -> Vec<u8> {
     v
 }
 
-/// A structurally valid HEIF container (ftyp + meta[hdlr, iloc, iprp/ipco/ispe]
-/// + mdat). The mdat payload is random bytes — this exercises the carver's
+/// A structurally valid HEIF container: `ftyp`, `meta` (hdlr, iloc,
+/// iprp/ipco/ispe) and `mdat`. The mdat payload is random bytes — this exercises the carver's
 /// box walking, not HEVC decoding.
 pub fn heif_like(w: u32, h: u32, payload: usize, seed: u64) -> Vec<u8> {
     let mut rng = Rng::new(seed);

@@ -208,10 +208,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ev = dir.path().join("ev.img");
         std::fs::write(&ev, vec![7u8; 100_000]).unwrap();
-        let mut rec =
-            register_evidence(&ev, EvidenceMode::WorkingCopy, &dir.path().join("work"), None, |_, _| {})
-                .unwrap();
-        assert_eq!(rec.working_copy_sha256.as_deref(), Some(rec.sha256_before.as_str()));
+        let mut rec = register_evidence(
+            &ev,
+            EvidenceMode::WorkingCopy,
+            &dir.path().join("work"),
+            None,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(
+            rec.working_copy_sha256.as_deref(),
+            Some(rec.sha256_before.as_str())
+        );
         assert_ne!(rec.analysed_path, rec.original_path);
         assert!(verify_evidence(&mut rec, None, |_| {}).unwrap());
         assert_eq!(rec.unchanged, Some(true));
@@ -222,8 +230,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ev = dir.path().join("ev.img");
         std::fs::write(&ev, b"abc").unwrap();
-        let mut rec =
-            register_evidence(&ev, EvidenceMode::ReadOnlyOriginal, dir.path(), None, |_, _| {}).unwrap();
+        let mut rec = register_evidence(
+            &ev,
+            EvidenceMode::ReadOnlyOriginal,
+            dir.path(),
+            None,
+            |_, _| {},
+        )
+        .unwrap();
         std::fs::write(&ev, b"abd").unwrap();
         assert!(!verify_evidence(&mut rec, None, |_| {}).unwrap());
     }
