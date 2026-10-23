@@ -1,0 +1,38 @@
+[
+  {
+    "name": "Photo_0000.jpg",
+    "original_path": "E:\\Pictures\\Holiday\\Photo_0000.jpg",
+    "scenario": "shift_delete",
+    "sha256": "a1c641d6c452da7c4a2a22e4411b093a969ace85aa98e069198cef966bb33d1c"
+  },
+  {
+    "name": "Photo_0001.jpg",
+    "original_path": "E:\\Pictures\\Holiday\\Photo_0001.jpg",
+    "scenario": "shift_delete",
+    "sha256": "d3d32850bb6a4dd168e45c3f4b192866be063860e8d08bf025ce5555070e861f"
+  },
+  {
+    "name": "Photo_0002.jpg",
+    "original_path": "E:\\Pictures\\Holiday\\Photo_0002.jpg",
+    "scenario": "recycle_bin",
+    "sha256": "c0fbc664b6dc344bf84e6bd47ee9b93b17e15550ab4a0f1c12873bbc6b63c0a1"
+  },
+  {
+    "name": "Photo_0003.jpg",
+    "original_path": "E:\\Pictures\\Holiday\\Photo_0003.jpg",
+    "scenario": "recycle_bin",
+    "sha256": "b519ad73d80d63a803891f7be932037fcbdb4727696d3f3b309a7daf0428f22f"
+  },
+  {
+    "name": "Photo_0004.jpg",
+    "original_path": "E:\\Pictures\\Holiday\\Photo_0004.jpg",
+    "scenario": "recycle_bin_emptied",
+    "sha256": "cdfaba831c948fe451d09c83a16e92a8a13350048f02d001b1ce3c8e35a12a29"
+  },
+  {
+    "name": "Photo_0005.jpg",
+    "original_path": "E:\\Pictures\\Holiday\\Photo_0005.jpg",
+    "scenario": "not_deleted",
+    "sha256": "0af4653a360886094f9a05c3c887a1c684453929a40ccaa3f509e7a7b0146238"
+  }
+]

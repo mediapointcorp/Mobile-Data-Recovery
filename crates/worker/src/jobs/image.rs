@@ -714,6 +714,68 @@ fn fat_recover(
     Ok(entries.len())
 }
 
+fn in_recycle_bin(path: &str) -> bool {
+    path.to_ascii_lowercase().contains("/$recycle.bin/")
+}
+
+/// `Some('R')` for a Recycle Bin data file (`$RXXXXXX.jpg`), `Some('I')`
+/// for its info file (`$IXXXXXX.jpg`).
+fn recycle_kind(name: &str) -> Option<char> {
+    let b = name.as_bytes();
+    if b.len() > 3 && b[0] == b'$' && b.iter().filter(|&&c| c == b'.').count() <= 1 {
+        match b[1] {
+            b'R' | b'r' => return Some('R'),
+            b'I' | b'i' => return Some('I'),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `<folder>/<suffix>` shared by a `$R…` file and its `$I…` file.
+fn recycle_key(path: &str) -> String {
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+    format!(
+        "{}/{}",
+        dir.to_ascii_lowercase(),
+        name.get(2..).unwrap_or("").to_ascii_lowercase()
+    )
+}
+
+/// Original path from a Recycle Bin `$I` file (Vista–8.1: v1, 10+: v2).
+pub fn parse_recycle_info(b: &[u8]) -> Option<String> {
+    let version = u64::from_le_bytes(b.get(..8)?.try_into().ok()?);
+    let units: Vec<u16> = match version {
+        1 => b
+            .get(24..24 + 520)?
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
+            .collect(),
+        2 => {
+            let n = u32::from_le_bytes(b.get(24..28)?.try_into().ok()?) as usize;
+            if n == 0 || n > 32_768 {
+                return None;
+            }
+            b.get(28..28 + 2 * n)?
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
+                .collect()
+        }
+        _ => return None,
+    };
+    let s = String::from_utf16_lossy(
+        &units
+            .into_iter()
+            .take_while(|&u| u != 0)
+            .collect::<Vec<_>>(),
+    );
+    (!s.is_empty()).then_some(s)
+}
+
 fn is_image_name(name: &str) -> bool {
     ImageFormat::from_extension(name) != ImageFormat::Unknown
 }
@@ -742,16 +804,51 @@ fn ntfs_recover(
         )
     };
     // Only image file names are examined; photos renamed to other
-    // extensions are still found by carving.
+    // extensions are still found by carving. Recycle Bin items ($R data,
+    // $I info) are always kept: a normally deleted photo is still there.
     let entries = nv.walk(
-        &|name, deleted| is_image_name(name) && (deleted || include_existing),
+        &|name, deleted| {
+            (is_image_name(name) && (deleted || include_existing)) || recycle_kind(name).is_some()
+        },
         &mut prog,
     );
+    // Original paths of recycled files, from their $I info files (also
+    // deleted ones, which survive emptying the bin until reused).
+    let mut originals: HashMap<String, String> = HashMap::new();
+    for e in entries
+        .iter()
+        .filter(|e| in_recycle_bin(&e.path) && recycle_kind(&e.name) == Some('I'))
+    {
+        if let Some(orig) = nv
+            .read_entry(e, 64 * 1024)
+            .ok()
+            .and_then(|b| parse_recycle_info(&b))
+        {
+            let key = recycle_key(&e.path);
+            if e.deleted {
+                originals.entry(key).or_insert(orig);
+            } else {
+                originals.insert(key, orig);
+            }
+        }
+    }
     let mut examined = 0;
     for e in &entries {
-        if !e.deleted && !include_existing {
+        let in_bin = in_recycle_bin(&e.path) && recycle_kind(&e.name) == Some('R');
+        if recycle_kind(&e.name) == Some('I')
+            || (!e.deleted && !include_existing && !in_bin)
+            || !is_image_name(&e.name)
+        {
             continue;
         }
+        let original = in_bin
+            .then(|| originals.get(&recycle_key(&e.path)).cloned())
+            .flatten();
+        let display_name = original
+            .as_deref()
+            .and_then(|o| o.rsplit(['\\', '/']).next())
+            .unwrap_or(&e.name)
+            .to_string();
         let head = nv.head(e, 16);
         let head_fmt = ImageFormat::sniff(&head);
         let ext_fmt = ImageFormat::from_extension(&e.name);
@@ -766,8 +863,19 @@ fn ntfs_recover(
         };
         let abs_offset = plan.pieces.iter().find_map(|p| p.0).map(|o| vol_offset + o);
         let meta = |r: &mut RecoveryResult| {
-            r.source_path = Some(e.path.clone());
+            r.source_path = Some(original.clone().unwrap_or_else(|| e.path.clone()));
             r.source_offset = abs_offset;
+            if in_bin {
+                r.metadata.insert("recycle_bin_path".into(), e.path.clone());
+                r.warnings.push(if e.deleted {
+                    "This photo had been moved to the Recycle Bin, and the Recycle Bin was later emptied.".to_string()
+                } else {
+                    "This photo is in the Windows Recycle Bin: deleted but not yet emptied. You can also restore it by opening the Recycle Bin, right-clicking it and choosing Restore.".to_string()
+                });
+                if original.is_none() {
+                    r.warnings.push("Its original name and folder were not found (the Recycle Bin's $I info file is gone).".into());
+                }
+            }
             r.metadata.insert("fs".into(), "NTFS".into());
             r.metadata
                 .insert("fs_volume_offset".into(), vol_offset.to_string());
@@ -816,7 +924,12 @@ fn ntfs_recover(
             );
             continue;
         }
-        let name_out = format!("ntfs_{:x}_{}_{}", vol_offset, e.record, safe_name(&e.name));
+        let name_out = format!(
+            "ntfs_{:x}_{}_{}",
+            vol_offset,
+            e.record,
+            safe_name(&display_name)
+        );
         if !e.deleted {
             let Ok(bytes) = nv.read_entry(e, MAX_FS_FILE) else {
                 continue;

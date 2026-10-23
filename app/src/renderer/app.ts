@@ -476,6 +476,7 @@ function tile(r: RecoveryResult): HTMLElement {
     h("div", { class: "mono", text: name }),
     h("span", { class: "chip", text: CLASSIFICATION_LABELS[r.classification] }),
     validationChip(r),
+    ...(r.metadata.recycle_bin_path ? [h("span", { class: "chip warn", text: "Recycle Bin" })] : []),
     h("div", { class: "muted", text: `${r.format.toUpperCase()} · ${r.width && r.height ? `${r.width}×${r.height}` : "?"} · ${fmtBytes(r.candidate_length)}` }),
   ]);
   const t = h("div", { class: "tile" }, [thumb, meta]);
